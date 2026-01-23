@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Carrega a biblioteca de Gráficos do Google -->
+  <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+  
+  <!-- Inclui o CSS estilizado -->
+  <?!= include('CSS'); ?>
+  
+  <style>
+    /* Estilos específicos para a tela de login que podem não estar no CSS global */
+    .login-header { text-align: center; margin-bottom: 20px; }
+    .login-header h2 { font-size: 30px; color: #3f51b5; margin-bottom: 10px; }
+    .login-header p.subtitle { font-size: 16px; color: #555; margin-top: -5px; margin-bottom: 0; }
+    .logo-img { display: block; margin: 0 auto 10px auto; width: 100px; height: 100px; border-radius: 50%; object-fit: cover; }
+    /* Preview area for multiple attachments */
+    .chat-attachments-list { display:flex; gap:8px; align-items:center; flex-wrap:wrap; max-width:180px; }
+    .chat-attachment-item { background:#fff; border:1px solid #ddd; padding:6px 8px; border-radius:6px; font-size:12px; display:flex; gap:6px; align-items:center; }
+    .chat-attachment-remove { cursor:pointer; color:#c62828; font-weight:bold; }
+  </style>
+</head>
+<body>
+
+  <!-- =========================================
+       1. TELA DE LOGIN
+       ========================================= -->
+  <div id="login-container" class="center-container">
+    <div class="card login-card">
+      <div class="login-header">
+        <!-- Logo do Sistema (Substituível) -->
+        <img src="https://www.oscarinn.com.br/wp-content/themes/criaturo-oscarinn/assets/images/Logo.svg">
+        <h2>S.I.M</h2>
+        <p class="subtitle">Sistema Interno de Manutenção</p> 
+      </div>
+      
+      <p id="login-message" class="message"></p>
+      
+      <div class="form-group">
+        <label for="login-nome">Nome de Usuário:</label>
+        <input type="text" id="login-nome" placeholder="Digite seu usuário">
+      </div>
+      <div class="form-group">
+        <label for="login-senha">Senha:</label>
+        <input type="password" id="login-senha" placeholder="Digite sua senha">
+      </div>
+      
+      <button class="btn btn-primary btn-full" onclick="handleLogin()">Entrar</button>
+    </div>
+    <div class="app-footer"><span class="app-version">Versão 1.26 Developed by Clodoaldo A. Garcia </span></div>
+  </div>
+
+  <!-- =========================================
+       2. PAINEL PRINCIPAL (SISTEMA)
+       ========================================= -->
+  <div id="main-panel" style="display: none;">
+    
+    <!-- Cabeçalho Superior -->
+    <header>
+      <div class="header-content">
+        <h1>Sistema de O.S.</h1>
+        <div class="user-info">
+          <span id="user-display">Usuário</span>
+          <button class="btn btn-secondary" onclick="logout()">Sair</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Navegação e Abas -->
+    <div class="tabs-container">
+      <nav class="tabs">
+        <button class="tab-button active" data-tab="gerar-os">Gerar O.S.</button>
+        <button class="tab-button" data-tab="painel-os" id="tab-painel-os">Painel de O.S.</button>
+        <button class="tab-button" data-tab="diario-tecnico" id="tab-diario-tecnico">Diário do Técnico</button>
+        <button class="tab-button" data-tab="consulta-rotinas" id="tab-consulta-rotinas">Consulta de Rotinas</button>
+        <button class="tab-button" data-tab="relatorios" id="tab-relatorios">Relatórios</button>
+        <button class="tab-button" data-tab="configuracoes" id="tab-configuracoes">Configurações</button> 
+        <button class="tab-button" data-tab="minha-conta" id="tab-minha-conta">Minha Conta</button> 
+      </nav>
+
+      <!-- ABA: Gerar O.S. -->
+      <div class="tab-content active" id="gerar-os">
+        <h3>📝 Nova Ordem de Serviço</h3>
+        <p id="os-gerar-message" class="message"></p>
+        
+        <!-- O formulário é renderizado via JS para incluir opções dinâmicas -->
+        <div id="os-form"><p>Carregando formulário...</p></div>
+        
+        <div class="form-group">
+            <label>Anexar Imagens (Opcional - Máx 6):</label>
+            <input type="file" id="os-anexo-multiple" accept="image/*" multiple onchange="handleFileChange(event)">
+            <small id="anexo-filename-display" class="anexo-filename"></small>
+        </div>
+        <button class="btn btn-primary btn-full" onclick="submitGerarOS()">Gerar Ordem de Serviço</button>
+      </div>
+
+      <!-- ABA: Painel de O.S. -->
+      <div class="tab-content" id="painel-os">
+        <h3>📋 Painel de Ordens de Serviço</h3>
+        <div id="painel-filtros-container"></div>
+        <div class="table-container">
+          <table id="os-table">
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>ID</th>
+                <th>Data</th>
+                <th>Solicitante</th>
+                <th class="hide-mobile">Setor</th>
+                <th>Descrição</th>
+                <th class="hide-mobile">Técnico</th>
+                <th class="hide-mobile">Prioridade</th>
+                <th>Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              <!-- Preenchido via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+      
+      <!-- ABA: Diário Técnico -->
+      <div class="tab-content" id="diario-tecnico">
+        <h3>📘 Diário de Tarefas Técnicas</h3>
+        <p id="diario-message" class="message"></p>
+        <div id="diario-form">
+          <div class="form-group"><label>Data:</label><input type="date" id="diario-data" disabled></div>
+          <div class="form-group"><label>Técnico:</label><input type="text" id="diario-tecnico" disabled></div>
+          <div class="form-group"><label>Descrição:</label><textarea id="diario-descricao" rows="5"></textarea></div>
+          <div class="form-group">
+            <input type="file" accept="image/*" multiple onchange="handleDiarioFileChange(event)">
+            <small id="diario-anexo-filename-display"></small>
+          </div>
+          <button class="btn btn-success btn-full" onclick="submitDiarioTecnico()">Salvar Registo</button>
+        </div>
+      </div>
+      
+      <!-- ABA: Consulta de Rotinas -->
+      <div class="tab-content" id="consulta-rotinas">
+        <h3>🔍 Consulta de Rotinas</h3>
+        <p id="rotinas-message" class="message"></p>
+        <div id="rotinas-filter-controls" class="filter-controls-flex">
+            <div class="form-group" style="flex:1;">
+              <label>Técnico:</label>
+              <select id="rotinas-filter-tecnico"><option value="Todos">Todos</option></select>
+            </div>
+            <div class="form-group" style="flex:1;">
+              <label>Início:</label>
+              <input type="date" id="rotinas-filter-data-inicio">
+            </div>
+            <div class="form-group" style="flex:1;">
+              <label>Fim:</label>
+              <input type="date" id="rotinas-filter-data-fim">
+            </div>
+            <button class="btn btn-primary" onclick="aplicarFiltroConsultaRotinas()">Filtrar</button>
+        </div>
+        <div class="table-container"><table id="rotinas-table"></table></div>
+        <button class="btn btn-success" onclick="imprimirConsultaRotinas()" style="margin-top:10px;">Imprimir</button>
+      </div>
+
+      <!-- ABA: Relatórios -->
+      <div class="tab-content" id="relatorios">
+        <h3>📊 Relatórios</h3>
+        <nav class="sub-tabs">
+          <button class="sub-tab-button active" data-sub-tab="estatisticas">Estatísticas</button>
+          <button class="sub-tab-button" data-sub-tab="relatorio-os">Relatório de O.S.</button>
+        </nav>
+        
+        <!-- Sub-aba Estatísticas -->
+        <div class="sub-tab-content active" id="estatisticas-subcontent">
+            <h4>Dashboard</h4>
+            <div class="filter-controls-flex" id="stats-filter-controls">
+              <div class="form-group" style="flex:1;">
+                <label>Início:</label>
+                <input type="date" id="stats-filter-data-inicio">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label>Fim:</label>
+                <input type="date" id="stats-filter-data-fim">
+              </div>
+              <button class="btn btn-primary" onclick="loadStatistics()">Aplicar</button>
+            </div>
+            <div class="stats-grid" id="stats-dashboard-container"><p>Carregando...</p></div>
+            <div id="charts-container" style="margin-top:30px;">
+              <div id="status-column-chart" style="width:100%; height:400px;"></div>
+              <div id="tech-performance-chart" style="width:100%; height:450px; margin-top:40px; border-top: 1px solid #eee; padding-top: 20px;"></div>
+            </div>
+        </div>
+        
+        <!-- Sub-aba Relatório Detalhado -->
+        <div class="sub-tab-content" id="relatorio-os-subcontent">
+            <h4>Relatório Detalhado</h4>
+            <div id="filter-controls"></div>
+            <div class="table-container"><table id="relatorios-table-os"></table></div>
+            <button class="btn btn-success" onclick="imprimirRelatorio()" style="margin-top:10px;">Imprimir</button>
+        </div>
+      </div>
+      
+      <!-- ABA: Configurações -->
+      <div class="tab-content" id="configuracoes">
+        <h3>⚙️ Configurações</h3>
+        <nav class="sub-tabs">
+          <button class="sub-tab-button active" data-sub-tab="acesso-senha">Acesso e Senha</button>
+          <button class="sub-tab-button" data-sub-tab="popup">Pop-up</button>
+          <button class="sub-tab-button" data-sub-tab="enviar-mensagem">Mensagens</button>
+          <button class="sub-tab-button" data-sub-tab="log-acoes">Logs</button>
+        </nav>
+        
+        <div class="sub-tab-content active" id="acesso-senha-subcontent">
+            <button class="btn btn-success" onclick="openUserModal(null)">+ Novo Utilizador</button>
+            <div class="table-container">
+              <table id="admin-users-table">
+                <thead><tr><th>Email</th><th>Nome</th><th>Nível</th><th>Ações</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+        </div>
+        
+        <div class="sub-tab-content" id="enviar-mensagem-subcontent">
+            <h4>Mensageiro</h4>
+            <p id="msg-send-message" class="message"></p>
+            <div class="form-group">
+              <label>Destinatário:</label>
+              <select id="msg-recipient-user"></select>
+            </div>
+            <div class="form-group">
+              <label>Mensagem:</label>
+              <textarea id="msg-content" rows="4"></textarea>
+            </div>
+            <button class="btn btn-primary btn-full" onclick="sendMessage()">Enviar</button>
+        </div>
+        
+        <div class="sub-tab-content" id="popup-subcontent"></div>
+        
+        <div class="sub-tab-content" id="log-acoes-subcontent">
+            <div class="table-container">
+              <table id="admin-logs-table">
+                <thead><tr><th>Data</th><th>User</th><th>Ação</th><th>Detalhes</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+        </div>
+      </div>
+
+      <!-- ABA: Minha Conta -->
+      <div class="tab-content" id="minha-conta">
+        <h3>🔑 Minha Conta</h3>
+        <div class="card" style="max-width:500px; margin:0 auto;">
+            <h4>Alterar Senha</h4>
+            <p id="change-password-message" class="message"></p>
+            <div class="form-group"><label>Email:</label><input type="text" id="cp-email" disabled></div>
+            <div class="form-group"><label>Senha Atual:</label><input type="password" id="cp-old-password"></div>
+            <div class="form-group"><label>Nova Senha:</label><input type="password" id="cp-new-password"></div>
+            <button class="btn btn-primary btn-full" onclick="submitChangePassword()">Salvar</button>
+        </div>
+        <div class="card" style="margin-top:20px;">
+          <h3>📩 Mensagens Recebidas</h3>
+          <div id="my-messages-container"><p class="no-messages">A carregar...</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================
+       3. WIDGETS FLUTUANTES (CHAT GLOBAL)
+       ========================================= -->
+  
+  <!-- Botão Flutuante (FAB) -->
+  <div id="chat-fab" class="chat-fab" onclick="toggleChatWindow()">
+    💬
+    <div id="chat-badge" class="chat-badge"></div>
+  </div>
+
+  <!-- Janela de Chat -->
+  <div id="chat-floating-window" class="chat-window" role="dialog" aria-label="Chat Global">
+    <div class="chat-header">
+      <span>Chat SIM - Oscarinn Eco Resort</span>
+      <span class="chat-close" onclick="toggleChatWindow()">&times;</span>
+    </div>
+    
+    <div id="chat-history-container" class="chat-body">
+      <p style="text-align:center; color:#777; margin-top:20px;">Carregando chat...</p>
+    </div>
+    
+    <div class="chat-footer">
+      <button class="chat-attach-btn" type="button" title="Anexar arquivo" onclick="document.getElementById('chat-attach-input').click()">📎</button>
+      <input type="file" id="chat-attach-input" accept="*/*" style="display:none" multiple onchange="handleChatAttachFiles(event)">
+      <div id="chat-attachments-preview" class="chat-attachments-list" aria-live="polite"></div>
+
+      <input type="text" id="chat-input-text" class="chat-input" placeholder="Digite uma mensagem...">
+      <button class="chat-send-btn" onclick="sendChatMessage()">&#10148;</button>
+    </div>
+  </div>
+
+  <!-- =========================================
+       4. MODAIS (POP-UPS)
+       ========================================= -->
+
+  <!-- Modal Detalhes OS -->
+  <div id="os-modal" class="modal">
+    <div class="modal-content">
+      <span class="close-button">&times;</span>
+      <h4>Detalhes OS <span id="modal-os-id"></span></h4>
+      <div id="modal-details"></div>
+      <hr>
+      <p id="modal-message" class="message"></p>
+      <div id="modal-edit-form"></div>
+    </div>
+  </div>
+
+  <!-- Modal Admin Usuários -->
+  <div id="user-admin-modal" class="modal">
+    <div class="modal-content" style="max-width:500px;">
+      <span class="close-button" onclick="document.getElementById('user-admin-modal').style.display='none';">&times;</span>
+      <h4 id="user-modal-title">Novo Utilizador</h4>
+      <p id="user-modal-message" class="message"></p>
+      <div class="form-group"><label>Email:</label><input type="text" id="user-email"></div>
+      <div class="form-group"><label>Nome:</label><input type="text" id="user-nome"></div>
+      <div class="form-group">
+        <label>Nível:</label>
+        <select id="user-nivel">
+          <option value="Solicitante">Solicitante</option>
+          <option value="Tecnico">Tecnico</option>
+          <option value="Admin">Admin</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Senha:</label><input type="password" id="user-senha"></div>
+      <button id="user-modal-save-btn" class="btn btn-primary btn-full" onclick="saveUser()">Salvar</button>
+      <button id="user-modal-delete-btn" class="btn btn-error btn-full" style="display:none; margin-top:10px;" onclick="deleteUser()">Excluir</button>
+    </div>
+  </div>
+
+  <!-- Modal Rotina -->
+  <div id="rotina-modal" class="modal">
+    <div class="modal-content" style="max-width:500px;">
+      <span class="close-button" onclick="document.getElementById('rotina-modal').style.display='none';">&times;</span>
+      <h4>Editar Rotina</h4>
+      <p id="rotina-modal-message" class="message"></p>
+      <div class="form-group"><label>Data:</label><input type="text" id="rotina-data" disabled></div>
+      <div class="form-group"><label>Técnico:</label><input type="text" id="rotina-tecnico" disabled></div>
+      <div class="form-group"><label>Descrição:</label><textarea id="rotina-descricao" rows="6"></textarea></div>
+      <button id="rotina-modal-save-btn" class="btn btn-primary btn-full" onclick="salvarAtualizacaoRotina()">Salvar</button>
+      <button id="rotina-modal-delete-btn" class="btn btn-error btn-full" style="margin-top:10px;" onclick="excluirRotina()">Excluir</button>
+    </div>
+  </div>
+
+  <!-- Modal Aviso Popup -->
+  <div id="popup-modal" class="modal">
+    <div class="modal-content" style="max-width:450px; text-align:center;">
+      <h4>Aviso</h4>
+      <img id="popup-image" style="max-width:100%; border-radius:8px; margin-bottom:15px; display:none;">
+      <p id="popup-content"></p>
+      <button class="btn btn-primary" onclick="document.getElementById('popup-modal').style.display='none';">Fechar</button>
+    </div>
+  </div>
+  
+  <!-- Modal Notificação Mensagem -->
+  <div id="message-notification-modal" class="modal">
+    <div class="modal-content" style="max-width:450px; text-align:center;">
+      <span class="close-button" onclick="document.getElementById('message-notification-modal').style.display='none';">&times;</span>
+      <h4>📩 Nova Mensagem</h4>
+      <p>Você tem mensagens novas do Administrador.</p>
+      <button class="btn btn-primary" onclick="openMessageNotificationTab()">Ver Mensagens</button>
+    </div>
+  </div>
+  
+  <!-- Modal Visualizar Mensagem (Detalhe) -->
+  <div id="view-message-modal" class="modal">
+     <div class="modal-content" style="max-width:500px;">
+       <span class="close-button" onclick="document.getElementById('view-message-modal').style.display='none';">&times;</span>
+       <h4>Detalhe da Mensagem</h4>
+       <p id="view-message-modal-message" class="message"></p>
+       <p><strong>De:</strong> <span id="msg-detail-from"></span></p>
+       <p><strong>Data:</strong> <span id="msg-detail-date"></span></p>
+       <div style="background:#f9f9f9; padding:10px; border-radius:5px; border:1px solid #eee; margin:10px 0; min-height:50px;">
+          <p id="msg-detail-body" style="white-space: pre-wrap; margin:0;"></p>
+       </div>
+       <button id="msg-delete-btn" class="btn btn-error btn-full">Excluir Mensagem</button>
+     </div>
+  </div>
+
+  <!-- Toast de Notificações -->
+  <div id="os-toast" class="toast"></div>
+
+  <!-- Inclui a Lógica JavaScript -->
+  <?!= include('JavaScript'); ?>
+
+</body>
+</html>
