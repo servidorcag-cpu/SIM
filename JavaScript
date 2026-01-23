@@ -1,0 +1,1475 @@
+<script>
+  /**
+   * =================================================================
+   * S.I.M - SISTEMA INTERNO DE MANUTENÇÃO (JAVASCRIPT CLIENT-SIDE)
+   * =================================================================
+   */
+
+  // --- Variáveis Globais de Estado ---
+  let loggedUser = null; 
+  let setoresList = [];
+  let tecnicosList = [];
+  let currentOSId = null; 
+  
+  // Estado dos Filtros do Painel OS
+  let currentPainelFilters = {
+    status: "Ativas", 
+    setor: "Todos",   
+    data: "Todas",
+    tecnico: "Todos"
+  };
+  
+  // --- Variáveis do Notificador de OS ---
+  const FAST_INTERVAL = 40000; 
+  const SLOW_INTERVAL = 60000; 
+  const AUDIO_INTERVAL = 30000; // Intervalo de 30 segundos para sons
+  
+  let osCheckInterval = null; 
+  let updateCheckInterval = null; 
+  let audioLoopInterval = null; 
+  let remoteAudioLoopInterval = null; 
+  let wakeLock = null; 
+  
+  // --- Variáveis do Notificador de Mensagens Privadas (Admin) ---
+  let privateMsgCheckInterval = null;
+  let privateMsgAudioLoop = null;
+
+  // --- Chaves de Sessão (LocalStorage) ---
+  const STORAGE_API = localStorage; 
+  const SESSION_KEY = 'os_user_session'; 
+  const ALARM_KEY = 'os_alarm_active'; 
+  const REMOTE_ALARM_KEY = 'os_remote_alarm_active'; 
+  const CHAT_UNREAD_KEY = 'sim_chat_unread'; // Chave para persistência de msg não lida
+
+  let lastKnownOSID = 0; 
+  let lastUpdateCheckTimestamp = new Date().toISOString(); 
+  let unreadOSAlarm = false;
+  let remoteAssignmentAlarm = false;
+
+  // --- Variáveis de Upload ---
+  let filesToUpload = []; 
+  let modalFilesToUpload = []; 
+  
+  // --- Variáveis Admin e Rotina ---
+  let currentRotinaRowIndex = null;
+  let adminUserListCache = [];
+
+  // --- CHAT GLOBAL (Variáveis de Serviço) ---
+  let chatPollingInterval = null;   
+  let isChatWindowOpen = false; // Controla se a janela flutuante está visível
+  let lastMessageSignature = ""; // Substitui o JSON para comparação mais estável
+  let cachedChatMessages = [];
+  let chatAudioLoopInterval = null; // Controle do loop de som do chat      
+
+  // --- NOVO: Anexos do Chat
+  let chatAttachments = []; // array de { base64, name, size, isImage }
+  
+  
+  /** * =================================================================
+   * 1. INICIALIZAÇÃO E SESSÃO
+   * =================================================================
+   */
+  document.addEventListener('DOMContentLoaded', function() {
+    
+    // Configura UI dinâmica para Relatórios (Rotinas)
+    setupRelatoriosDynamicUI();
+
+    // Tenta carregar sessão existente
+    const savedSession = loadSession();
+    
+    // Listener de tecla Enter para Login
+    const enterLogin = (e) => { if (e.key === 'Enter') handleLogin(); };
+    const nomeInput = document.getElementById('login-nome');
+    const senhaInput = document.getElementById('login-senha');
+    if (nomeInput) nomeInput.addEventListener('keydown', enterLogin);
+    if (senhaInput) senhaInput.addEventListener('keydown', enterLogin);
+    
+    // Restaura sessão se existir
+    if (savedSession) {
+        restoreSession(savedSession);
+    }
+
+    // Listeners de Navegação (Abas e Sub-abas)
+    const tabsContainer = document.querySelector('.tabs-container');
+    if (tabsContainer) {
+        tabsContainer.addEventListener('click', function(event) {
+            // Clique em aba principal
+            if (event.target.classList.contains('tab-button')) {
+                openTab(event.target.dataset.tab);
+            }
+            // Clique em sub-aba (dentro de um conteúdo)
+            if (event.target.classList.contains('sub-tab-button')) {
+                const parentTabContent = event.target.closest('.tab-content');
+                if (parentTabContent) {
+                    openSubTab(event.target.dataset.subTab, parentTabContent.id);
+                }
+            }
+        });
+    }
+    
+    // Listeners para fechar Modais (clique no X ou fora da janela)
+    setupModalListeners('os-modal');
+    setupModalListeners('user-admin-modal');
+    setupModalListeners('rotina-modal');
+    setupModalListeners('popup-modal');
+    setupModalListeners('message-notification-modal'); 
+    setupModalListeners('view-message-modal');
+
+    // Wake Lock (Manter tela ligada se possível)
+    window.addEventListener('focus', () => { if (loggedUser) requestWakeLock(); });
+    
+    // Tenta carregar aviso de administrador na tela de login
+    setTimeout(() => {
+        if (typeof google !== 'undefined' && google.script) loadPopUpOnLoginScreen();
+    }, 500);
+    
+    // Listener para envio de chat com tecla Enter
+    const chatInput = document.getElementById('chat-input-text');
+    if(chatInput) {
+        chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendChatMessage();
+            }
+        });
+    }
+    
+    // Listener de foco na janela de chat (para garantir que o som pare)
+    const chatWindow = document.getElementById('chat-floating-window');
+    if (chatWindow) {
+        chatWindow.addEventListener('click', () => { stopChatAlarm(); });
+        chatWindow.addEventListener('focusin', () => { stopChatAlarm(); });
+    }
+  });
+
+  // Funções auxiliares de sessão
+  function saveSession(userData) { try { STORAGE_API.setItem(SESSION_KEY, JSON.stringify(userData)); } catch (e) {} }
+  function loadSession() { try { return JSON.parse(STORAGE_API.getItem(SESSION_KEY)); } catch (e) { return null; } }
+  function clearSession() { 
+      STORAGE_API.removeItem(SESSION_KEY); 
+      STORAGE_API.removeItem(ALARM_KEY); 
+      STORAGE_API.removeItem(REMOTE_ALARM_KEY); 
+      STORAGE_API.removeItem(CHAT_UNREAD_KEY);
+  }
+  
+  function saveAlarmState(isActive) { try{ STORAGE_API.setItem(ALARM_KEY, JSON.stringify(isActive)); unreadOSAlarm=isActive;}catch(e){} }
+  function loadAlarmState() { try{ unreadOSAlarm=JSON.parse(STORAGE_API.getItem(ALARM_KEY)); return unreadOSAlarm;}catch(e){return false;} }
+  
+  function saveRemoteAlarmState(isActive) { try{ STORAGE_API.setItem(REMOTE_ALARM_KEY, JSON.stringify(isActive)); remoteAssignmentAlarm=isActive;}catch(e){} }
+  function loadRemoteAlarmState() { try{ remoteAssignmentAlarm=JSON.parse(STORAGE_API.getItem(REMOTE_ALARM_KEY)); return remoteAssignmentAlarm;}catch(e){return false;} }
+
+  // Restaura a interface para o estado "Logado"
+  function restoreSession(sessionData) {
+      loggedUser = sessionData;
+      const userDisplay = document.getElementById('user-display');
+      if (userDisplay) userDisplay.textContent = sessionData.nome;
+
+      // Troca telas
+      document.getElementById('login-container').style.display = 'none';
+      document.getElementById('main-panel').style.display = 'block';
+      
+      // MOSTRAR O BOTÃO FLUTUANTE DO CHAT
+      document.getElementById('chat-fab').style.display = 'flex';
+
+      // Configura menu baseado no nível de acesso
+      configureAcessLevel(sessionData.nivel);
+      
+      // Inicia serviço de Chat em segundo plano
+      startChatBackgroundService();
+
+      // Inicia notificadores
+      startPrivateMessageNotifier(); // Notificador de Mensagens Privadas
+      if (['tecnico', 'admin', 'gerente'].includes(sessionData.nivel.toLowerCase())) {
+          startOSNotifier(); 
+          startUpdateNotifier(); 
+      }
+      
+      requestWakeLock();
+      document.addEventListener('visibilitychange', handleWakeLockVisibility);
+
+      loadDropdownData(); // Carrega listas de Setores e Técnicos
+      
+      // Abre aba padrão
+      let defaultTab = 'gerar-os';
+      if (sessionData.nivel.toLowerCase() === 'tecnico') defaultTab = 'painel-os';
+      openTab(defaultTab);
+      
+      // Restaura alarmes sonoros se estavam ativos (ex: refresh da página)
+      if (loadAlarmState()) startAudioLoop(); 
+      if (loadRemoteAlarmState()) startRemoteAudioLoop(); 
+  }
+
+  // Lógica de Login
+  function handleLogin() {
+    const nome = document.getElementById('login-nome').value.trim();
+    const senha = document.getElementById('login-senha').value;
+    
+    if (!nome || !senha) {
+      showMessage('login-message', 'Preencha Nome e Senha.', false);
+      return;
+    }
+    
+    const loginBtn = document.querySelector('#login-container .btn-primary');
+    if(loginBtn) loginBtn.textContent = 'A verificar...';
+
+    google.script.run
+      .withSuccessHandler(response => {
+        if(loginBtn) loginBtn.textContent = 'Entrar';
+        if (response.status === 'sucesso') {
+          loggedUser = response;
+          saveSession(response);
+          restoreSession(response);
+        } else {
+          showMessage('login-message', response.mensagem, false);
+        }
+      })
+      .withFailureHandler(err => {
+         if(loginBtn) loginBtn.textContent = 'Entrar';
+         showMessage('login-message', 'Erro de conexão.', false);
+      })
+      .verificarLogin(nome, senha);
+  }
+
+  // Lógica de Logout
+  function logout() {
+    loggedUser = null;
+    currentPainelFilters = { status: "Ativas", setor: "Todos", data: "Todas" }; 
+    stopChatBackgroundService(); 
+    stopPrivateMessageNotifier(); // Para notificador de mensagens privadas
+    
+    // Esconder Chat Flutuante
+    document.getElementById('chat-floating-window').style.display = 'none';
+    document.getElementById('chat-fab').style.display = 'none';
+    isChatWindowOpen = false;
+
+    document.getElementById('login-container').style.display = 'flex';
+    document.getElementById('main-panel').style.display = 'none';
+    document.getElementById('login-nome').value = '';
+    document.getElementById('login-senha').value = '';
+    
+    stopAudioLoop();
+    stopRemoteAudioLoop();
+    stopChatAudioLoop(); // Para som do chat se houver
+    if (osCheckInterval) clearInterval(osCheckInterval);
+    if (updateCheckInterval) clearInterval(updateCheckInterval);
+    
+    document.removeEventListener('visibilitychange', handleWakeLockVisibility);
+    releaseWakeLock();
+    clearSession();
+    loadPopUpOnLoginScreen();
+  }
+
+  // Configura visibilidade das abas
+  function configureAcessLevel(nivel) {
+    const n = nivel.toLowerCase();
+    const els = {
+        painel: document.getElementById('tab-painel-os'),
+        diario: document.getElementById('tab-diario-tecnico'),
+        consulta: document.getElementById('tab-consulta-rotinas'),
+        relatorios: document.getElementById('tab-relatorios'),
+        config: document.getElementById('tab-configuracoes'),
+        minhaConta: document.getElementById('tab-minha-conta')
+    };
+
+    if (els.painel) els.painel.style.display = ['admin', 'gerente', 'tecnico', 'recepcao'].includes(n) ? 'inline-block' : 'none';
+    if (els.diario) els.diario.style.display = (n === 'tecnico') ? 'inline-block' : 'none';
+    if (els.consulta) els.consulta.style.display = ['admin', 'gerente', 'tecnico'].includes(n) ? 'inline-block' : 'none';
+    if (els.relatorios) els.relatorios.style.display = ['admin', 'gerente'].includes(n) ? 'inline-block' : 'none';
+    if (els.config) els.config.style.display = (n === 'admin') ? 'inline-block' : 'none';
+    if (els.minhaConta) els.minhaConta.style.display = (n !== 'solicitante') ? 'inline-block' : 'none';
+  }
+
+  /** * =================================================================
+   * 2. NAVEGAÇÃO E UTILITÁRIOS
+   * =================================================================
+   */
+  
+  // Função para injetar dinamicamente o botão e content de Relatório de Rotinas
+  function setupRelatoriosDynamicUI() {
+      const parent = document.getElementById('relatorios');
+      if (!parent) return;
+
+      const subTabsContainer = parent.querySelector('.sub-tabs');
+      // Verifica se o botão já existe
+      if (subTabsContainer && !subTabsContainer.querySelector('[data-sub-tab="relatorio-rotinas"]')) {
+          const btn = document.createElement('button');
+          btn.className = 'sub-tab-button';
+          btn.dataset.subTab = 'relatorio-rotinas';
+          btn.textContent = 'Relatório Rotinas';
+          subTabsContainer.appendChild(btn);
+      }
+
+      // Verifica se o container de conteúdo já existe
+      if (!parent.querySelector('#relatorio-rotinas-subcontent')) {
+          const contentDiv = document.createElement('div');
+          contentDiv.id = 'relatorio-rotinas-subcontent';
+          contentDiv.className = 'sub-tab-content';
+          // Container para os controles específicos
+          contentDiv.innerHTML = '<div id="rotinas-report-controls"></div><div class="table-container" style="margin-top:20px; overflow-x:auto;" id="rotinas-report-output"></div>';
+          parent.appendChild(contentDiv);
+      }
+  }
+
+  // Lógica da Janela de Chat Flutuante
+  function toggleChatWindow() {
+      const win = document.getElementById('chat-floating-window');
+      
+      // Verifica estado atual visualmente
+      if (win.style.display === 'none') {
+          openChatWindow();
+      } else {
+          win.style.display = 'none';
+          isChatWindowOpen = false;
+      }
+  }
+
+  function openChatWindow() {
+      const win = document.getElementById('chat-floating-window');
+      const badge = document.getElementById('chat-badge');
+      
+      win.style.display = 'flex'; // Abre visualmente
+      isChatWindowOpen = true; // Marca estado
+      
+      badge.style.display = 'none'; // Esconde notificação
+      stopChatAlarm(); // Para som e limpa persistência
+      
+      // Renderiza histórico se houver cache
+      if (cachedChatMessages.length > 0) renderChatDOM(cachedChatMessages, true);
+      
+      // Foca no input
+      setTimeout(() => document.getElementById('chat-input-text').focus(), 100);
+      
+      // Força atualização
+      loadGlobalChatHistory(true, false);
+  }
+
+  // Navegação de Abas Principais
+  function openTab(tabName) {
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
+    
+    const btn = document.querySelector(`.tab-button[data-tab="${tabName}"]`);
+    const content = document.getElementById(tabName);
+    if (btn) btn.classList.add('active');
+    if (content) content.classList.add('active');
+
+    if (tabName === 'painel-os' && loggedUser) loadPainelOS();
+    
+    // --- ATUALIZAÇÃO: Preencher campos do Diário Técnico automaticamente ---
+    if (tabName === 'diario-tecnico' && loggedUser) {
+        const elData = document.getElementById('diario-data');
+        const elNome = document.getElementById('diario-tecnico-nome');
+        if (elData) elData.value = new Date().toISOString().split('T')[0];
+        if (elNome) { 
+            elNome.value = loggedUser.nome; 
+            elNome.disabled = true; 
+        }
+    }
+
+    if (tabName === 'consulta-rotinas' && loggedUser) { 
+        loadRotinasControls(); 
+        forceInlineFilterLayout('rotinas-filter-tecnico'); 
+        aplicarFiltroConsultaRotinas(); 
+    }
+    
+    // --- ATUALIZAÇÃO: Relatórios (Limpeza de Filtros) ---
+    if (tabName === 'relatorios') {
+        const activeSub = content.querySelector('.sub-tab-button.active');
+        if (!activeSub) {
+             openSubTab('estatisticas', 'relatorios');
+        } else {
+             // Força o recarregamento dos controles para limpar filtros ao entrar na aba
+             const subTab = activeSub.dataset.subTab;
+             if (subTab === 'estatisticas') {
+                 loadStatistics();
+                 forceInlineFilterLayout('stats-filter-data-inicio');
+             } else if (subTab === 'relatorio-os') {
+                 loadRelatorioControls(); // Reseta datas para padrão
+                 aplicarFiltroRelatorio();
+             } else if (subTab === 'relatorio-rotinas') {
+                 loadRelatorioRotinasControls(); // Reseta datas para padrão
+                 aplicarFiltroRelatorioRotinas();
+             }
+        }
+    }
+    
+    if (tabName === 'configuracoes') {
+        const activeSub = content.querySelector('.sub-tab-button.active');
+        if (!activeSub) {
+            openSubTab('acesso-senha', 'configuracoes');
+        } else {
+            if (activeSub.dataset.subTab === 'acesso-senha') loadAdminUsersTable();
+            else if (activeSub.dataset.subTab === 'popup') loadPopUpConfigAdmin();
+            else if (activeSub.dataset.subTab === 'log-acoes') loadActionLogs();
+            else if (activeSub.dataset.subTab === 'enviar-mensagem') loadMessageSender();
+        }
+    }
+
+    if (tabName === 'minha-conta') {
+        document.getElementById('cp-email').value = loggedUser.email;
+        google.script.run.withSuccessHandler(() => {}).markMessagesAsRead(loggedUser.email);
+        loadMyMessages();
+    }
+  }
+
+  // Navegação de Sub-abas
+  function openSubTab(subTabName, parentTabId) {
+    const parent = document.getElementById(parentTabId);
+    if (!parent) return;
+    
+    parent.querySelectorAll('.sub-tab-content').forEach(c => c.classList.remove('active'));
+    parent.querySelectorAll('.sub-tab-button').forEach(b => b.classList.remove('active'));
+    
+    const subBtn = parent.querySelector(`.sub-tab-button[data-sub-tab="${subTabName}"]`);
+    const subContent = parent.querySelector(`#${subTabName}-subcontent`);
+    
+    if(subBtn) subBtn.classList.add('active');
+    if(subContent) subContent.classList.add('active');
+
+    if (parentTabId === 'relatorios') {
+        if (subTabName === 'estatisticas') { loadStatistics(); forceInlineFilterLayout('stats-filter-data-inicio'); }
+        if (subTabName === 'relatorio-os') { loadRelatorioControls(); aplicarFiltroRelatorio(); }
+        if (subTabName === 'relatorio-rotinas') { loadRelatorioRotinasControls(); aplicarFiltroRelatorioRotinas(); }
+    }
+    if (parentTabId === 'configuracoes') {
+        if (subTabName === 'acesso-senha') loadAdminUsersTable();
+        if (subTabName === 'popup') loadPopUpConfigAdmin();
+        if (subTabName === 'log-acoes') loadActionLogs();
+        if (subTabName === 'enviar-mensagem') loadMessageSender();
+    }
+  }
+
+  // Helper para forçar CSS inline
+  function forceInlineFilterLayout(childInputId) {
+      const inputEl = document.getElementById(childInputId);
+      if (inputEl) {
+          const formGroup = inputEl.closest('.form-group');
+          if (formGroup && formGroup.parentElement) {
+              const container = formGroup.parentElement;
+              container.style.cssText = "display: flex; flex-direction: row; gap: 15px; align-items: flex-end; flex-wrap: wrap;";
+              Array.from(container.children).forEach(child => {
+                  if (child.classList.contains('form-group')) {
+                      child.style.cssText = "flex: 1; min-width: 150px; margin-bottom: 0;";
+                  }
+              });
+          }
+      }
+  }
+
+  // Configura fechamento de modais
+  function setupModalListeners(modalId) {
+      const modal = document.getElementById(modalId);
+      if (!modal) return;
+      const closeButtons = modal.querySelectorAll('.close-button');
+      closeButtons.forEach(btn => btn.onclick = () => {
+          modal.style.display = "none";
+          if (modalId === 'os-modal') modalFilesToUpload = [];
+          
+          // Se fechar o aviso de mensagem manualmente, para o som para não enlouquecer o usuário
+          if (modalId === 'message-notification-modal') stopPrivateMsgAudio();
+      });
+      window.addEventListener('click', (e) => {
+          if (e.target == modal) {
+              modal.style.display = "none";
+              if (modalId === 'os-modal') modalFilesToUpload = [];
+              
+              // Se fechar o aviso de mensagem clicando fora, para o som
+              if (modalId === 'message-notification-modal') stopPrivateMsgAudio();
+          }
+      });
+  }
+
+  function showMessage(elId, msg, isSuccess) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    el.textContent = msg;
+    el.className = isSuccess ? 'message success-message' : 'message error-message';
+    el.style.display = 'block';
+    setTimeout(() => { el.style.display = 'none'; }, 5000);
+  }
+
+  function getStatusClass(status) {
+    switch (status) {
+      case 'Aberta': return 'status-aberta';
+      case 'Em Andamento': return 'status-andamento';
+      case 'Pendente': return 'status-pendente';
+      case 'Concluída': return 'status-concluida';
+      case 'Cancelada': return 'status-cancelada';
+      default: return 'status-default';
+    }
+  }
+
+  // --- Upload Handlers (ATUALIZADO PARA ACUMULAÇÃO) ---
+  function handleFileChange(event) { 
+      // Passar array atual (filesToUpload) para acumular
+      processFilesAccumulative(event.target, 'anexo-filename-display', filesToUpload, (f) => filesToUpload = f); 
+  }
+  function handleModalOSFileChange(event) { 
+      // Passar array atual (modalFilesToUpload) para acumular
+      processFilesAccumulative(event.target, 'modal-anexo-filename-display', modalFilesToUpload, (f) => modalFilesToUpload = f); 
+  }
+  function handleDiarioFileChange(event) { 
+      // Passar array atual (modalFilesToUpload) para acumular
+      processFilesAccumulative(event.target, 'diario-anexo-filename-display', modalFilesToUpload, (f) => modalFilesToUpload = f); 
+  }
+
+  // Função genérica de processamento de arquivos com ACUMULAÇÃO
+  function processFilesAccumulative(inputElement, displayId, currentList, callback) {
+      const files = inputElement.files;
+      const display = document.getElementById(displayId);
+      
+      if (!files || files.length === 0) return;
+
+      // Inicializa lista se for nula
+      const currentArray = currentList || [];
+      const currentCount = currentArray.length;
+      const remainingSlots = 6 - currentCount;
+
+      // Verificação Inicial de Limite
+      if (remainingSlots <= 0) {
+          alert('Limite máximo de 6 imagens já atingido. Gere a OS (ou salve) para limpar os anexos.');
+          inputElement.value = ''; // Limpa o input para não prender o usuário
+          return;
+      }
+
+      // Prepara arquivos para processar
+      let filesToProcess = Array.from(files);
+      
+      // Se selecionou mais do que cabe, corta o excesso
+      if (filesToProcess.length > remainingSlots) {
+          alert(`Você selecionou ${filesToProcess.length} arquivos, mas só há espaço para mais ${remainingSlots}. Apenas os primeiros ${remainingSlots} serão adicionados.`);
+          filesToProcess = filesToProcess.slice(0, remainingSlots);
+      }
+
+      let tempFiles = []; 
+      let count = 0;
+      
+      filesToProcess.forEach(file => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+              tempFiles.push({ base64: reader.result, name: file.name });
+              count++;
+              
+              // Quando todos os arquivos deste lote forem processados
+              if (count === filesToProcess.length) {
+                  // Concatena com a lista existente
+                  const newList = currentArray.concat(tempFiles);
+                  
+                  // Atualiza a variável global via callback
+                  callback(newList);
+                  
+                  // Atualiza o texto na tela
+                  if (display) {
+                      display.textContent = `${newList.length} arquivo(s) carregado(s). (Máx 6)`;
+                      display.style.color = newList.length === 6 ? 'red' : '#555'; // Aviso visual se cheio
+                  }
+                  
+                  // Limpa o input file para permitir selecionar o mesmo arquivo novamente se necessário
+                  // e para permitir selecionar mais arquivos sem "substituir" visualmente no input (que só mostra 1 arquivo)
+                  inputElement.value = ''; 
+              }
+          };
+          reader.readAsDataURL(file);
+      });
+  }
+
+  /** * =================================================================
+   * 3. SISTEMA DE CHAT GLOBAL (SERVIÇO DE FUNDO + JANELA FLUTUANTE)
+   * =================================================================
+   */
+  function startChatBackgroundService() {
+    setupGlobalChatUI();
+    if (chatPollingInterval) clearInterval(chatPollingInterval);
+    
+    lastMessageSignature = ""; 
+    // NOTA: Não limpamos os alarmes aqui para permitir persistência ao recarregar a página
+    
+    loadGlobalChatHistory(true, true); 
+    
+    chatPollingInterval = setInterval(() => { loadGlobalChatHistory(false, false); }, 4000);
+  }
+
+  function stopChatBackgroundService() {
+    if (chatPollingInterval) clearInterval(chatPollingInterval);
+    chatPollingInterval = null;
+    lastMessageSignature = ""; 
+    stopChatAlarm();
+  }
+
+  function setupGlobalChatUI() {
+    // Configurações UI adicionais se necessário
+  }
+
+  // Helper para criar uma assinatura única da mensagem
+  function getMsgSignature(msg) {
+      if (!msg) return "empty";
+      return (msg.timestamp || "") + "_" + (msg.message || "") + "_" + (msg.image || "");
+  }
+
+  function loadGlobalChatHistory(forceScroll, isInitialLoad) {
+    if (!loggedUser) return;
+    
+    const chatWin = document.getElementById('chat-floating-window');
+    const isVisible = (chatWin && chatWin.style.display !== 'none');
+    isChatWindowOpen = isVisible; 
+
+    google.script.run.withSuccessHandler(messages => {
+        cachedChatMessages = messages; 
+
+        const newestMsg = messages.length > 0 ? messages[messages.length - 1] : null;
+        const currentSignature = getMsgSignature(newestMsg);
+        
+        // Lógica de Novas Mensagens (Polling)
+        if (lastMessageSignature !== "" && currentSignature !== lastMessageSignature && !isInitialLoad) {
+             if (newestMsg && !newestMsg.isMe) {
+                 if (!isChatWindowOpen) {
+                     triggerChatNotification();
+                 } 
+             }
+        }
+        
+        // Lógica de Persistência ao Recarregar a Página (Initial Load)
+        if (isInitialLoad && newestMsg && !newestMsg.isMe) {
+             const wasUnread = STORAGE_API.getItem(CHAT_UNREAD_KEY) === 'true';
+             if (wasUnread && !isChatWindowOpen) {
+                 triggerChatNotification();
+             }
+        }
+
+        lastMessageSignature = currentSignature;
+
+        if (isChatWindowOpen) {
+             renderChatDOM(messages, forceScroll);
+             // Se janela está aberta, marcamos como lida e paramos o som
+             if (STORAGE_API.getItem(CHAT_UNREAD_KEY) === 'true') {
+                 stopChatAlarm();
+             }
+        }
+
+    }).getGlobalChatHistory(loggedUser.email);
+  }
+
+  // Função auxiliar para disparar a notificação
+  function triggerChatNotification() {
+      document.getElementById('chat-badge').style.display = 'block'; 
+      showToast("Nova mensagem no Chat!");
+      startChatAudioLoop(); // Inicia o som
+      STORAGE_API.setItem(CHAT_UNREAD_KEY, 'true'); // Marca como não lida
+  }
+
+  function renderChatDOM(messages, forceScroll) {
+      const container = document.getElementById('chat-history-container');
+      if (!container) return;
+      
+      if (messages.length === 0) {
+          container.innerHTML = '<p style="text-align:center; color:#777; margin-top:20px; font-size:12px;">Chat Interno.<br>Diga olá! 👋</p>';
+          return;
+      }
+      
+      let html = '';
+      messages.forEach(msg => {
+          const typeClass = msg.isMe ? 'msg-sent' : 'msg-received';
+          const senderInfo = !msg.isMe ? `<div class="msg-sender">${msg.fromName}</div>` : '';
+          let contentHtml = '';
+          if (msg.message) contentHtml += msg.message.replace(/\n/g, '<br>');
+          if (msg.image) {
+              const att = String(msg.image || '');
+              const parts = att.split('\n').filter(Boolean);
+              parts.forEach(p => {
+                const lower = p.toLowerCase();
+                if (lower.match(/\.(png|jpe?g|gif|webp|svg)(\?.*)?$/)) {
+                  contentHtml += `<div style="margin-top:6px;"><a href="${p}" target="_blank"><img src="${p}" style="max-width:180px; border-radius:8px; display:block;"></a></div>`;
+                } else {
+                  contentHtml += `<div style="margin-top:6px;"><a href="${p}" target="_blank">${p.split('/').pop()}</a></div>`;
+                }
+              });
+          }
+          html += `<div class="msg-bubble ${typeClass}">${senderInfo}${contentHtml}<span class="msg-time">${(msg.timestamp || '').split(' ')[1] || ''}</span></div>`;
+      });
+      
+      if (container.innerHTML !== html) {
+           const wasAtBottom = (container.scrollTop + container.clientHeight >= container.scrollHeight - 50);
+           container.innerHTML = html;
+           if (forceScroll || wasAtBottom) {
+               container.scrollTop = container.scrollHeight;
+           }
+      }
+  }
+
+  // --- Funções de Controle de Áudio do Chat ---
+
+  function startChatAudioLoop() {
+      // Se já estiver tocando, não faz nada
+      if (chatAudioLoopInterval) return;
+
+      // Toca imediatamente a primeira vez
+      playNotificationSound(0.6, 600);
+      
+      // Inicia o intervalo de 10 segundos
+      chatAudioLoopInterval = setInterval(() => {
+          playNotificationSound(0.6, 600);
+      }, AUDIO_INTERVAL);
+  }
+
+  function stopChatAudioLoop() {
+      if (chatAudioLoopInterval) {
+          clearInterval(chatAudioLoopInterval);
+          chatAudioLoopInterval = null;
+      }
+  }
+
+  function stopChatAlarm() {
+      document.getElementById('chat-badge').style.display = 'none';
+      stopChatAudioLoop(); // Para o som
+      STORAGE_API.removeItem(CHAT_UNREAD_KEY); // Remove a persistência
+  }
+
+  // Handler do input file do chat (múltiplos arquivos)
+  function handleChatAttachFiles(event) {
+    const input = event.target;
+    const files = input.files;
+    if (!files || files.length === 0) return;
+
+    const maxTotalFiles = 6; // limite opcional
+    const remaining = Math.max(0, maxTotalFiles - chatAttachments.length);
+    const toProcess = Array.from(files).slice(0, remaining);
+
+    if (toProcess.length < files.length) {
+      alert(`Apenas ${remaining} arquivos adicionais podem ser anexados (limite ${maxTotalFiles}).`);
+    }
+
+    let processed = 0;
+    toProcess.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const dataUrl = e.target.result;
+        const isImage = file.type.startsWith('image/');
+        chatAttachments.push({ base64: dataUrl, name: file.name, size: file.size, isImage: isImage });
+        processed++;
+        if (processed === toProcess.length) {
+          renderChatAttachmentsPreview();
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // limpa input para permitir reuso
+    input.value = '';
+  }
+
+  function renderChatAttachmentsPreview() {
+    const container = document.getElementById('chat-attachments-preview');
+    container.innerHTML = '';
+    chatAttachments.forEach((a, idx) => {
+      const item = document.createElement('div');
+      item.className = 'chat-attachment-item';
+      if (a.isImage) {
+        const img = document.createElement('img');
+        img.src = a.base64;
+        img.style.width = '40px';
+        img.style.height = '40px';
+        img.style.objectFit = 'cover';
+        img.style.borderRadius = '6px';
+        item.appendChild(img);
+      }
+      const text = document.createElement('div');
+      text.style.maxWidth = '80px';
+      text.style.overflow = 'hidden';
+      text.style.textOverflow = 'ellipsis';
+      text.style.whiteSpace = 'nowrap';
+      text.textContent = a.name;
+      item.appendChild(text);
+
+      const rm = document.createElement('div');
+      rm.className = 'chat-attachment-remove';
+      rm.title = 'Remover';
+      rm.textContent = '✕';
+      rm.onclick = () => { chatAttachments.splice(idx,1); renderChatAttachmentsPreview(); };
+      item.appendChild(rm);
+
+      container.appendChild(item);
+    });
+  }
+
+  function sendChatMessage() {
+    const input = document.getElementById('chat-input-text');
+    const msg = input.value.trim();
+    if (!msg && chatAttachments.length === 0) return;
+
+    input.value = ''; 
+    const container = document.getElementById('chat-history-container');
+    let tempHtml = '';
+    if (msg) {
+      tempHtml += `<div class="msg-bubble msg-sent" style="opacity:0.7">${msg.replace(/\n/g, '<br>')} <span class="msg-time">...</span></div>`;
+    }
+    chatAttachments.forEach(a => {
+      if (a.isImage) {
+        tempHtml += `<div class="msg-bubble msg-sent" style="opacity:0.9"><img src="${a.base64}" style="max-width:140px; border-radius:8px; margin:5px 0;"><div style="font-size:11px;color:#666;margin-top:4px;">${a.name}</div></div>`;
+      } else {
+        tempHtml += `<div class="msg-bubble msg-sent" style="opacity:0.9"><div style="font-weight:bold;">${a.name}</div><div style="font-size:12px;color:#666;">${(a.size/1024).toFixed(1)} KB</div></div>`;
+      }
+    });
+    container.insertAdjacentHTML('beforeend', tempHtml);
+    container.scrollTop = container.scrollHeight;
+
+    const filesToSend = chatAttachments.map(a => ({ base64: a.base64, name: a.name }));
+
+    google.script.run.withSuccessHandler(res => {
+        if (res.status === 'sucesso') { loadGlobalChatHistory(true, false); } 
+        else { alert('Erro ao enviar: ' + res.message); }
+    }).sendChatMessageAdvanced(loggedUser.email, 'GLOBAL', msg, filesToSend);
+
+    // limpa anexos e preview
+    chatAttachments = [];
+    renderChatAttachmentsPreview();
+  }
+
+  /** * =================================================================
+   * 4. GERAÇÃO DE O.S. e DROPWDOMS
+   * =================================================================
+   */
+  function loadDropdownData() {
+    let sLoaded = false, tLoaded = false;
+    const render = () => { if (sLoaded && tLoaded) { renderGerarOSForm(); loadPainelOS(); } };
+    google.script.run.withSuccessHandler(d => { setoresList=d||[]; sLoaded=true; render(); }).getSetores();
+    google.script.run.withSuccessHandler(d => { tecnicosList=d||[]; tLoaded=true; render(); }).getTecnicos();
+  }
+
+  function renderGerarOSForm() {
+    if (!loggedUser) return;
+    let tecnicoHtml = '';
+    if (['admin','gerente','tecnico'].includes(loggedUser.nivel.toLowerCase())) {
+        const opts = tecnicosList.map(t => `<option value="${t}">${t}</option>`).join('');
+        tecnicoHtml = `<div class="form-group"><label>Técnico:</label><select id="os-tecnico"><option value="">-- Atribuir (Opcional) --</option>${opts}</select></div>`;
+    }
+    const html = `
+      <div class="form-group"><label>Solicitante:</label><input type="text" value="${loggedUser.nome}" disabled></div>
+      <div class="form-group"><label>Setor:</label><select id="os-setor"><option value="">-- Selecione --</option>${setoresList.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
+      <div class="form-group"><label>Descrição:</label><textarea id="os-descricao" rows="5" required></textarea></div>
+      <div class="form-group"><label>Prioridade:</label><select id="os-prioridade"><option value="Baixa">Baixa</option><option value="Média" selected>Média</option><option value="Alta">Alta</option></select></div>
+      ${tecnicoHtml}
+    `;
+    document.getElementById('os-form').innerHTML = html;
+  }
+
+  function submitGerarOS() {
+    const setor = document.getElementById('os-setor').value;
+    const desc = document.getElementById('os-descricao').value;
+    if (!setor || !desc) { showMessage('os-gerar-message', 'Preencha Setor e Descrição.', false); return; }
+    const data = {
+      solicitanteEmail: loggedUser.email, solicitanteNome: loggedUser.nome,
+      setor: setor, descricao: desc, prioridade: document.getElementById('os-prioridade').value,
+      tecnico: document.getElementById('os-tecnico') ? document.getElementById('os-tecnico').value : '',
+      filesData: filesToUpload
+    };
+    showMessage('os-gerar-message', 'Gerando...', true);
+    google.script.run.withSuccessHandler(res => {
+        if(res.status === 'sucesso') {
+            showMessage('os-gerar-message', res.mensagem, true);
+            document.getElementById('os-descricao').value = ''; document.getElementById('os-setor').value = ''; 
+            
+            // LIMPA UPLOAD E DISPLAY
+            filesToUpload = []; 
+            document.getElementById('os-anexo-multiple').value = ''; 
+            document.getElementById('anexo-filename-display').textContent = '';
+            
+            if (document.querySelector('.tab-button[data-tab="painel-os"].active')) aplicarFiltroPainel();
+        } else { showMessage('os-gerar-message', res.mensagem, false); }
+    }).gerarOS(data);
+  }
+
+  /** * =================================================================
+   * 5. PAINEL DE O.S.
+   * =================================================================
+   */
+  function loadPainelOS() {
+    if (!loggedUser) return;
+    const container = document.getElementById('painel-filtros-container');
+    if (!container) return;
+    
+    // --- CORREÇÃO: Respeitar os filtros atuais ao redesenhar ---
+    const isSel = (val, cur) => val === cur ? 'selected' : '';
+
+    const setorOpts = setoresList.map(s => `<option value="${s}" ${isSel(s, currentPainelFilters.setor)}>${s}</option>`).join('');
+    const tecOpts = tecnicosList.map(t => `<option value="${t}" ${isSel(t, currentPainelFilters.tecnico)}>${t}</option>`).join('');
+    
+    // Dropdown de Status
+    const stOpts = ["Ativas", "Todos", "Aberta", "Em Andamento", "Pendente", "Concluída"]
+        .map(s => `<option value="${s}" ${isSel(s, currentPainelFilters.status)}>${s}</option>`).join('');
+        
+    // Dropdown de Data
+    const dtOpts = ["Hoje", "Todas"].map(d => `<option value="${d}" ${isSel(d, currentPainelFilters.data)}>${d}</option>`).join('');
+
+    container.innerHTML = `
+      <div class="filter-controls-flex" style="display: flex; flex-direction: row; gap: 15px; align-items: flex-end; flex-wrap: wrap;">
+        <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;"><label>Data:</label>
+            <select id="pf-data" onchange="aplicarFiltroPainel()" style="width: 100%;">${dtOpts}</select>
+        </div>
+        <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;"><label>Status:</label>
+            <select id="pf-status" onchange="aplicarFiltroPainel()" style="width: 100%;">${stOpts}</select>
+        </div>
+        <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;"><label>Setor:</label>
+            <select id="pf-setor" onchange="aplicarFiltroPainel()" style="width: 100%;"><option value="Todos" ${isSel('Todos', currentPainelFilters.setor)}>Todos</option>${setorOpts}</select>
+        </div>
+        <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;"><label>Técnico:</label>
+            <select id="pf-tecnico" onchange="aplicarFiltroPainel()" style="width: 100%;"><option value="Todos" ${isSel('Todos', currentPainelFilters.tecnico)}>Todos</option><option value="Nenhum" ${isSel('Nenhum', currentPainelFilters.tecnico)}>Não Atribuído</option>${tecOpts}</select>
+        </div>
+      </div>`;
+      
+    aplicarFiltroPainel();
+  }
+
+  function aplicarFiltroPainel() {
+    const fStatus = document.getElementById('pf-status') ? document.getElementById('pf-status').value : 'Ativas';
+    const fSetor = document.getElementById('pf-setor') ? document.getElementById('pf-setor').value : 'Todos';
+    const fData = document.getElementById('pf-data') ? document.getElementById('pf-data').value : 'Todas';
+    const fTecnico = document.getElementById('pf-tecnico') ? document.getElementById('pf-tecnico').value : 'Todos';
+    
+    currentPainelFilters = { status: fStatus, setor: fSetor, data: fData, tecnico: fTecnico };
+    
+    const tbody = document.querySelector('#os-table tbody');
+    tbody.innerHTML = '<tr><td colspan="9">Carregando...</td></tr>';
+    
+    // Adicionamos 'setor' ao objeto enviado ao servidor, caso o backend suporte
+    google.script.run.withSuccessHandler(list => {
+        if (!list) { tbody.innerHTML = '<tr><td colspan="9">Nada encontrado.</td></tr>'; return; }
+        
+        let filtered = list;
+        
+        // --- FILTRAGEM CLIENT-SIDE REDUNDANTE PARA GARANTIR PRECISÃO ---
+        
+        // 1. Filtro de Setor (Coluna Index 4) - CORREÇÃO: Com Trim e Lowercase se necessário
+        if (fSetor !== 'Todos') { 
+            filtered = filtered.filter(os => String(os[4]||'').trim() === fSetor.trim()); 
+        }
+        
+        // 2. Filtro de Técnico (Coluna Index 7)
+        if (fTecnico !== 'Todos') {
+            if (fTecnico === 'Nenhum') {
+                // Filtra OS onde o técnico é vazio, nulo ou apenas espaços
+                filtered = filtered.filter(os => !os[7] || String(os[7]).trim() === '');
+            } else {
+                // Filtra OS onde o técnico corresponde exatamente
+                filtered = filtered.filter(os => String(os[7]||'').trim() === fTecnico);
+            }
+        }
+        
+        renderOSDataTable(filtered);
+    }).filtrarOSPainel({ status: fStatus, data: fData, tecnico: fTecnico, setor: fSetor });
+  }
+
+  function renderOSDataTable(list) {
+    const tbody = document.querySelector('#os-table tbody'); tbody.innerHTML = '';
+    if (!list || list.length === 0) { tbody.innerHTML = '<tr><td colspan="9">Nenhuma OS encontrada.</td></tr>'; return; }
+    list.forEach(os => {
+       const row = tbody.insertRow();
+       if (os[9] === 'Alta') row.classList.add('priority-alta');
+       const stClass = getStatusClass(os[6]);
+       row.insertCell(0).innerHTML = `<span class="status-span ${stClass}">${os[6]}</span>`;
+       const idCell = row.insertCell(1); idCell.textContent = os[0]; if (os[6] === 'Aberta') idCell.classList.add('id-aberta');
+       row.insertCell(2).textContent = os[1]; row.insertCell(3).textContent = os[3]; row.insertCell(4).textContent = os[4];
+       row.insertCell(5).innerHTML = (os[5] || '').substring(0,50) + (os[11] ? ' &#128206;' : '');
+       row.insertCell(6).textContent = os[7] || '-'; row.insertCell(7).textContent = os[9];
+       const btn = document.createElement('button'); btn.textContent = 'Ver/Editar'; btn.className = 'btn btn-secondary'; btn.onclick = () => openOSModal(os);
+       row.insertCell(8).appendChild(btn);
+       row.cells[4].classList.add('hide-mobile'); row.cells[6].classList.add('hide-mobile'); row.cells[7].classList.add('hide-mobile');
+    });
+  }
+
+  function openOSModal(os) {
+    currentOSId = os[0]; const modal = document.getElementById('os-modal');
+    const anexos = (os[11]||'').split('\n').filter(u=>u).map((u,i) => `<a href="${u}" target="_blank">Anexo ${i+1}</a>`).join(' | ');
+    
+    // --- ATUALIZAÇÃO: Forçar scroll para o CONTEÚDO INTEIRO do modal ---
+    const detailsContainer = document.getElementById('modal-details');
+    if (detailsContainer && detailsContainer.parentElement) {
+        detailsContainer.parentElement.style.maxHeight = '85vh'; 
+        detailsContainer.parentElement.style.overflowY = 'auto'; 
+        detailsContainer.parentElement.style.display = 'block'; 
+    }
+    
+    // --- ATUALIZAÇÃO: Descrição com Scroll e Formatação ---
+    const details = `
+        <p><b>ID:</b> ${os[0]} | <b>Data:</b> ${os[1]}</p>
+        <p><b>Solicitante:</b> ${os[3]} | <b>Setor:</b> ${os[4]}</p>
+        <p><b>Descrição:</b></p>
+        <div style="max-height: 200px; overflow-y: auto; background-color: #f8f9fa; padding: 8px; border: 1px solid #dee2e6; border-radius: 4px; margin-bottom: 10px;">
+            ${os[5].replace(/\n/g, '<br>')}
+        </div>
+        <p><b>Anexos:</b> ${anexos || 'Nenhum'}</p>
+        <hr>
+        <p><b>Histórico:</b></p>
+        <div style="background:#f9f9f9; padding:5px; max-height:150px; overflow-y:auto; font-size:12px; border: 1px solid #eee;">
+            ${(os[8]||'').replace(/\n/g,'<br>')}
+        </div>`;
+    
+    document.getElementById('modal-details').innerHTML = details;
+    
+    const canEdit = ['admin','gerente','tecnico'].includes(loggedUser.nivel.toLowerCase());
+    if (canEdit) {
+        const tecOpts = tecnicosList.map(t => `<option value="${t}" ${os[7]===t?'selected':''}>${t}</option>`).join('');
+        document.getElementById('modal-edit-form').innerHTML = `
+           <div class="form-group"><label>Status:</label><select id="m-status"><option value="Aberta" ${os[6]==='Aberta'?'selected':''}>Aberta</option><option value="Em Andamento" ${os[6]==='Em Andamento'?'selected':''}>Em Andamento</option><option value="Pendente" ${os[6]==='Pendente'?'selected':''}>Pendente</option><option value="Concluída" ${os[6]==='Concluída'?'selected':''}>Concluída</option><option value="Cancelada" ${os[6]==='Cancelada'?'selected':''}>Cancelada</option></select></div>
+           <div class="form-group"><label>Técnico:</label><select id="m-tecnico"><option value="">-</option>${tecOpts}</select></div>
+           <div class="form-group"><label>Prioridade:</label><select id="m-prio"><option value="Baixa" ${os[9]==='Baixa'?'selected':''}>Baixa</option><option value="Média" ${os[9]==='Média'?'selected':''}>Média</option><option value="Alta" ${os[9]==='Alta'?'selected':''}>Alta</option></select></div>
+           <div class="form-group"><label>Obs:</label><textarea id="m-obs"></textarea></div>
+           <div class="form-group"><input type="file" multiple onchange="handleModalOSFileChange(event)"><small id="modal-anexo-filename-display"></small></div>
+           <button class="btn btn-primary" onclick="saveOSEdit()">Salvar</button>`;
+    } else { document.getElementById('modal-edit-form').innerHTML = ''; }
+    modal.style.display = 'block';
+  }
+
+  function saveOSEdit() {
+      const st = document.getElementById('m-status').value; const tec = document.getElementById('m-tecnico').value; const prio = document.getElementById('m-prio').value; const obs = document.getElementById('m-obs').value;
+      showMessage('modal-message', 'Salvando...', true);
+      google.script.run.withSuccessHandler(r => {
+          if (r.status === 'sucesso') { showMessage('modal-message', r.message, true); setTimeout(() => { document.getElementById('os-modal').style.display='none'; loadPainelOS(); }, 1000); } else { showMessage('modal-message', r.message, false); }
+      }).atualizarOS(currentOSId, st, obs, tec, prio, loggedUser.email, modalFilesToUpload);
+  }
+
+  /** * =================================================================
+   * 6. DIÁRIO E ROTINAS
+   * =================================================================
+   */
+  function submitDiarioTecnico() {
+      const desc = document.getElementById('diario-descricao').value;
+      if (!desc) { showMessage('diario-message', 'Preencha a descrição.', false); return; }
+      
+      // Captura data e hora atual
+      const now = new Date();
+      const formattedDate = String(now.getDate()).padStart(2,'0') + '/' + 
+                            String(now.getMonth()+1).padStart(2,'0') + '/' + 
+                            now.getFullYear() + ' ' + 
+                            String(now.getHours()).padStart(2,'0') + ':' + 
+                            String(now.getMinutes()).padStart(2,'0') + ':' + 
+                            String(now.getSeconds()).padStart(2,'0');
+
+      const data = { 
+          data: formattedDate,
+          tecnicoEmail: loggedUser.email, 
+          tecnicoNome: loggedUser.nome, 
+          descricao: desc, 
+          filesData: modalFilesToUpload 
+      };
+
+      showMessage('diario-message', 'Salvando...', true);
+      google.script.run.withSuccessHandler(r => {
+          if (r.status === 'sucesso') { 
+              showMessage('diario-message', r.message, true); 
+              document.getElementById('diario-descricao').value = ''; 
+              modalFilesToUpload = []; 
+              document.getElementById('diario-anexo-filename-display').textContent = ''; 
+          } else { 
+              showMessage('diario-message', r.message, false); 
+          }
+      }).salvarDiarioTecnico(data);
+  }
+
+  function loadRotinasControls() {
+      const sel = document.getElementById('rotinas-filter-tecnico');
+      sel.innerHTML = '<option value="Todos">Todos</option>' + tecnicosList.map(t => `<option value="${t}">${t}</option>`).join('');
+  }
+
+  function aplicarFiltroConsultaRotinas() {
+      const f = { 
+        tecnico: document.getElementById('rotinas-filter-tecnico').value, 
+        dataInicio: document.getElementById('rotinas-filter-data-inicio').value, 
+        dataFim: document.getElementById('rotinas-filter-data-fim').value 
+      };
+
+      const tbl = document.getElementById('rotinas-table'); tbl.innerHTML = 'Carregando...';
+      google.script.run.withSuccessHandler(list => {
+          let html = '<thead><tr><th>Data/Hora</th><th>Técnico</th><th>Desc</th><th>Ação</th></tr></thead><tbody>';
+          if (!list || list.length === 0) html += '<tr><td colspan="4">Nada encontrado.</td></tr>';
+          else { 
+              const isAdmin = loggedUser.nivel.toLowerCase() === 'admin'; 
+              list.forEach(r => { 
+                  html += `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${isAdmin ? `<button class="btn btn-primary" onclick='editRotina(${JSON.stringify(r)})'>Gerir</button>` : '-'}</td></tr>`; 
+              }); 
+          }
+          tbl.innerHTML = html + '</tbody>';
+      }).filtrarRotinas(f);
+  }
+  
+  function editRotina(r) { currentRotinaRowIndex = r[4]; document.getElementById('rotina-data').value = r[0]; document.getElementById('rotina-tecnico').value = r[1]; document.getElementById('rotina-descricao').value = r[2]; document.getElementById('rotina-modal').style.display = 'block'; }
+  function salvarAtualizacaoRotina() { const desc = document.getElementById('rotina-descricao').value; google.script.run.withSuccessHandler(r => { if (r.status==='sucesso') { document.getElementById('rotina-modal').style.display='none'; aplicarFiltroConsultaRotinas(); } else alert(r.message); }).atualizarRotina(loggedUser.email, currentRotinaRowIndex, desc); }
+  function excluirRotina() { if(confirm('Tem certeza?')) { google.script.run.withSuccessHandler(r => { document.getElementById('rotina-modal').style.display='none'; aplicarFiltroConsultaRotinas(); }).excluirRotina(loggedUser.email, currentRotinaRowIndex); } }
+
+  /** * =================================================================
+   * 7. RELATÓRIOS E ESTATÍSTICAS
+   * =================================================================
+   */
+  function loadStatistics() {
+      const d1 = document.getElementById('stats-filter-data-inicio').value;
+      const d2 = document.getElementById('stats-filter-data-fim').value;
+
+      const container = document.getElementById('stats-dashboard-container'); container.innerHTML = 'Carregando...';
+      google.charts.load('current', {'packages':['corechart']});
+      google.script.run.withSuccessHandler(stats => {
+          container.innerHTML = `<div class="stat-card"><div class="stat-number">${stats.total}</div><div class="stat-label">Total</div></div><div class="stat-card"><div class="stat-number" style="color:red">${stats.abertas}</div><div class="stat-label">Abertas</div></div><div class="stat-card"><div class="stat-number" style="color:blue">${stats.andamento}</div><div class="stat-label">Andamento</div></div><div class="stat-card"><div class="stat-number" style="color:green">${stats.concluidas}</div><div class="stat-label">Concluídas</div></div>`;
+          
+          google.charts.setOnLoadCallback(() => {
+              // 1. Gráfico de Status OS
+              if (stats.chartData && stats.chartData.length > 1) {
+                  const dataStatus = google.visualization.arrayToDataTable(stats.chartData);
+                  new google.visualization.ColumnChart(document.getElementById('status-column-chart')).draw(dataStatus, {title:'Distribuição de OS por Status', legend:'none'});
+              }
+              
+              // 2. Gráfico de Desempenho Técnico (OS vs Diário)
+              if (stats.techPerformanceData && stats.techPerformanceData.length > 1) {
+                  const dataTech = google.visualization.arrayToDataTable(stats.techPerformanceData);
+                  new google.visualization.ColumnChart(document.getElementById('tech-performance-chart')).draw(dataTech, {
+                      title: 'Desempenho por Técnico (Atendimento OS x Registros Diário)',
+                      legend: { position: 'top' },
+                      bar: { groupWidth: '75%' },
+                      vAxis: { title: 'Quantidade', minValue: 0 },
+                      colors: ['#3f51b5', '#4caf50']
+                  });
+              } else {
+                  document.getElementById('tech-performance-chart').innerHTML = '<p style="text-align:center; padding-top:100px; color:#888;">Nenhum dado de desempenho técnico disponível no período.</p>';
+              }
+          });
+          
+      }).getDashboardStatistics(loggedUser.email, d1, d2);
+  }
+
+  function loadRelatorioControls() {
+      const div = document.getElementById('filter-controls');
+      const outputContainer = document.getElementById('report-output');
+      if (outputContainer) outputContainer.innerHTML = '<table id="relatorios-table-os" class="styled-table"></table>';
+      
+      const today = new Date();
+      const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+      const toDateInput = (d) => d.toISOString().split('T')[0]; 
+      
+      const defaultStart = toDateInput(firstDay);
+      const defaultEnd = toDateInput(today);
+      
+      div.innerHTML = `
+        <div class="filter-controls-flex" style="display: flex; flex-direction: row; gap: 15px; align-items: flex-end; flex-wrap: wrap;">
+           <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
+             <label>Status:</label>
+             <select id="fr-status">
+                <option value="Todos">Todas</option>
+                <option value="Ativas">Ativas</option>
+                <option value="Aberta">Abertas</option>
+                <option value="Em Andamento">Em Andamento</option>
+                <option value="Pendente">Pendentes</option>
+                <option value="Concluída">Concluídas</option>
+             </select>
+           </div>
+           
+           <!-- ALTERAÇÃO: FILTRO DE SETOR EM VEZ DE TÉCNICO -->
+           <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
+             <label>Setor:</label>
+             <select id="fr-setor">
+               <option value="Todos">Todos</option>
+               ${setoresList.map(s => `<option value="${s}">${s}</option>`).join('')}
+             </select>
+           </div>
+
+           <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
+             <label>Início:</label>
+             <input type="date" id="fr-d1" value="${defaultStart}">
+           </div>
+           <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
+             <label>Fim:</label>
+             <input type="date" id="fr-d2" value="${defaultEnd}">
+           </div>
+           <button class="btn btn-primary" style="height: 42px; margin-bottom: 0;" onclick="aplicarFiltroRelatorio()">Filtrar</button>
+        </div>`;
+  }
+  
+  // --- NOVA FUNÇÃO: Controles para Relatório de Rotinas ---
+  function loadRelatorioRotinasControls() {
+      const div = document.getElementById('rotinas-report-controls');
+      if (!div) return;
+
+      const outputContainer = document.getElementById('rotinas-report-output');
+      if (outputContainer) outputContainer.innerHTML = '<table id="relatorios-table-rotinas" class="styled-table"></table>';
+      
+      const today = new Date();
+      const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+      const toDateInput = (d) => d.toISOString().split('T')[0]; 
+      
+      const defaultStart = toDateInput(firstDay);
+      const defaultEnd = toDateInput(today);
+      
+      div.innerHTML = `
+        <div class="filter-controls-flex" style="display: flex; flex-direction: row; gap: 15px; align-items: flex-end; flex-wrap: wrap;">
+           <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
+             <label>Técnico:</label>
+             <select id="fr-rotina-tec"><option value="Todos">Todos</option>${tecnicosList.map(t=>`<option value="${t}">${t}</option>`).join('')}</select>
+           </div>
+           <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
+             <label>Início:</label>
+             <input type="date" id="fr-rotina-d1" value="${defaultStart}">
+           </div>
+           <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
+             <label>Fim:</label>
+             <input type="date" id="fr-rotina-d2" value="${defaultEnd}">
+           </div>
+           <button class="btn btn-primary" style="height: 42px; margin-bottom: 0;" onclick="aplicarFiltroRelatorioRotinas()">Filtrar</button>
+        </div>`;
+  }
+  
+  function aplicarFiltroRelatorio() {
+      const rawStatus = document.getElementById('fr-status').value;
+      const statusToSend = (rawStatus === 'Ativas') ? 'Todos' : rawStatus;
+
+      const f = { 
+        status: statusToSend, 
+        setor: document.getElementById('fr-setor').value, // ALTERAÇÃO: Envia Setor
+        dataInicio: document.getElementById('fr-d1').value, 
+        dataFim: document.getElementById('fr-d2').value 
+      };
+      
+      const tbl = document.getElementById('relatorios-table-os');
+      tbl.innerHTML = '<tr><td colspan="7">Carregando...</td></tr>';
+      
+      google.script.run
+        .withSuccessHandler(list => {
+            if (!list || list.length === 0) {
+                tbl.innerHTML = '<thead><tr><th>ID</th><th>Data</th><th>Solicitante</th><th>Setor</th><th>Desc</th><th>Status</th><th>Técnico</th></tr></thead><tbody><tr><td colspan="7">Nada encontrado no período.</td></tr></tbody>';
+                return;
+            }
+
+            let dataToRender = list;
+            if (rawStatus === 'Ativas') {
+                dataToRender = list.filter(r => r[6] !== 'Concluída' && r[6] !== 'Cancelada');
+            }
+
+            if (dataToRender.length === 0) {
+                tbl.innerHTML = '<thead><tr><th>ID</th><th>Data</th><th>Solicitante</th><th>Setor</th><th>Desc</th><th>Status</th><th>Técnico</th></tr></thead><tbody><tr><td colspan="7">Nenhuma OS Ativa encontrada.</td></tr></tbody>';
+                return;
+            }
+
+            const groups = {};
+            dataToRender.forEach(o => {
+                const status = o[6] || 'Sem Status';
+                if (!groups[status]) groups[status] = [];
+                groups[status].push(o);
+            });
+
+            const sortedStatuses = Object.keys(groups).sort();
+
+            let html = '<thead><tr><th>ID</th><th>Data</th><th>Solicitante</th><th>Setor</th><th>Desc</th><th>Status</th><th>Técnico</th></tr></thead><tbody>';
+            
+            sortedStatuses.forEach(status => {
+                html += `<tr style="background-color: #e0e0e0; font-weight: bold;"><td colspan="7" style="text-align:left; padding: 12px; border-bottom: 2px solid #ccc;">STATUS: ${status.toUpperCase()} (${groups[status].length})</td></tr>`;
+                groups[status].forEach(o => {
+                     html += `<tr><td>${o[0]}</td><td>${o[1]}</td><td>${o[3]}</td><td>${o[4]}</td><td>${o[5]}</td><td><span class="status-span ${getStatusClass(o[6])}">${o[6]}</span></td><td>${o[7]}</td></tr>`; 
+                });
+            });
+
+            tbl.innerHTML = html + '</tbody>';
+        })
+        .withFailureHandler(error => {
+            tbl.innerHTML = `<tr><td colspan="7" style="color:red; font-weight:bold;">Erro no servidor: ${error.message}</td></tr>`;
+        })
+        .filtrarOS(f);
+  }
+
+  // --- NOVA FUNÇÃO: Filtrar e Renderizar Relatório de Rotinas ---
+  function aplicarFiltroRelatorioRotinas() {
+      const f = { 
+        tecnico: document.getElementById('fr-rotina-tec').value, 
+        dataInicio: document.getElementById('fr-rotina-d1').value, 
+        dataFim: document.getElementById('fr-rotina-d2').value 
+      };
+      
+      const tbl = document.getElementById('relatorios-table-rotinas');
+      if(tbl) tbl.innerHTML = '<tr><td colspan="3">Carregando...</td></tr>';
+      
+      google.script.run
+        .withSuccessHandler(list => {
+            if (!list || list.length === 0) {
+                if(tbl) tbl.innerHTML = '<thead><tr><th>Data/Hora</th><th>Técnico</th><th>Descrição</th></tr></thead><tbody><tr><td colspan="3">Nada encontrado no período.</td></tr></tbody>';
+                return;
+            }
+
+            let html = '<thead><tr><th>Data/Hora</th><th>Técnico</th><th>Descrição</th></tr></thead><tbody>';
+            list.forEach(r => {
+                // r[0]=Data, r[1]=Tecnico, r[2]=Desc, r[3]=Url
+                html += `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`; 
+            });
+            if(tbl) tbl.innerHTML = html + '</tbody>';
+        })
+        .withFailureHandler(error => {
+            if(tbl) tbl.innerHTML = `<tr><td colspan="3" style="color:red; font-weight:bold;">Erro: ${error.message}</td></tr>`;
+        })
+        .filtrarRotinas(f);
+  }
+
+  function imprimirRelatorio() { const w = window.open('','','width=800,height=600'); w.document.write('<html><body><h2>Relatório OS</h2>'+document.getElementById('relatorios-table-os').outerHTML+'</body></html>'); w.document.close(); w.print(); }
+  function imprimirConsultaRotinas() { const w = window.open('','','width=800,height=600'); w.document.write('<html><body><h2>Rotinas</h2>'+document.getElementById('rotinas-table').outerHTML+'</body></html>'); w.document.close(); w.print(); }
+
+  /** * =================================================================
+   * 8. ADMINISTRAÇÃO (USERS, LOGS, POPUP)
+   * =================================================================
+   */
+  function loadAdminUsersTable() {
+      const tbody = document.querySelector('#admin-users-table tbody'); tbody.innerHTML = '<tr><td colspan="4">Carregando...</td></tr>';
+      google.script.run.withSuccessHandler(list => {
+          tbody.innerHTML = ''; list.forEach(u => { const row = tbody.insertRow(); row.insertCell(0).textContent = u[0]; row.insertCell(1).textContent = u[1]; row.insertCell(2).textContent = u[2]; const btn = document.createElement('button'); btn.textContent = 'Editar'; btn.className='btn btn-secondary'; btn.onclick = () => openUserModal(u); row.insertCell(3).appendChild(btn); }); adminUserListCache = list; 
+      }).getAllUsers(loggedUser.email);
+  }
+  
+  function openUserModal(u) {
+      document.getElementById('user-admin-modal').style.display='block';
+      if (u) { document.getElementById('user-modal-title').textContent = 'Editar Utilizador'; document.getElementById('user-email').value = u[0]; document.getElementById('user-email').disabled=true; document.getElementById('user-nome').value = u[1]; document.getElementById('user-nivel').value = u[2]; document.getElementById('user-senha').placeholder = 'Vazio mantem'; document.getElementById('user-modal-delete-btn').style.display='block'; } else { document.getElementById('user-modal-title').textContent = 'Novo Utilizador'; document.getElementById('user-email').value = ''; document.getElementById('user-email').disabled=false; document.getElementById('user-nome').value = ''; document.getElementById('user-senha').placeholder = 'Obrigatória'; document.getElementById('user-modal-delete-btn').style.display='none'; }
+  }
+  
+  function saveUser() { const u = { email: document.getElementById('user-email').value, nome: document.getElementById('user-nome').value, nivel: document.getElementById('user-nivel').value, senha: document.getElementById('user-senha').value }; google.script.run.withSuccessHandler(r => { if (r.status==='sucesso') { document.getElementById('user-admin-modal').style.display='none'; loadAdminUsersTable(); } else alert(r.message); }).saveUser(loggedUser.email, u); }
+  function deleteUser() { if(confirm('Excluir?')) { const email = document.getElementById('user-email').value; google.script.run.withSuccessHandler(r => { if (r.status==='sucesso') { document.getElementById('user-admin-modal').style.display='none'; loadAdminUsersTable(); } else alert(r.message); }).deleteUser(loggedUser.email, email); } }
+
+  function loadActionLogs() { google.script.run.withSuccessHandler(logs => { const tbody = document.querySelector('#admin-logs-table tbody'); let html = ''; logs.forEach(l => html+=`<tr><td>${l[0]}</td><td>${l[1]}</td><td>${l[2]}</td><td>${l[3]}</td></tr>`); tbody.innerHTML = html; }).getActionLogs(loggedUser.email); }
+  
+  // =========================================================
+  // CORREÇÃO E MELHORIA DAS FUNÇÕES DO POP-UP
+  // =========================================================
+  function loadPopUpConfigAdmin() { 
+      google.script.run.withSuccessHandler(c => { 
+          const isEnabled = String(c.habilitado).toUpperCase() === 'TRUE';
+          document.getElementById('popup-subcontent').innerHTML = `
+            <h4>Pop-up Login</h4>
+            <div class="form-group">
+                <label>Ativo:</label>
+                <select id="pp-en">
+                    <option value="TRUE" ${isEnabled ? 'selected' : ''}>Sim</option>
+                    <option value="FALSE" ${!isEnabled ? 'selected' : ''}>Não</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Imagem URL (Opcional):</label>
+                <input type="text" id="pp-img" value="${c.imageUrl || ''}" placeholder="https://...">
+            </div>
+            <div class="form-group">
+                <label>Msg:</label>
+                <textarea id="pp-msg" rows="4">${c.mensagem}</textarea>
+            </div>
+            <button class="btn btn-primary" onclick="savePopUp()">Salvar</button>`; 
+      }).getConfiguracaoPopUp(); 
+  }
+
+  function savePopUp() { 
+      const c = { 
+          habilitado: document.getElementById('pp-en').value, 
+          mensagem: document.getElementById('pp-msg').value,
+          imageUrl: document.getElementById('pp-img').value // Adicionado campo de imagem
+      }; 
+      google.script.run.withSuccessHandler(r => alert(r.message)).saveConfiguracaoPopUp(loggedUser.email, c); 
+  }
+  
+  function loadPopUpOnLoginScreen() { 
+      google.script.run.withSuccessHandler(c => { 
+          // Correção: Converter para string e maiúsculo para garantir comparação
+          if (String(c.habilitado).toUpperCase() === 'TRUE') { 
+              document.getElementById('popup-content').textContent = c.mensagem; 
+              
+              // Verifica se tem imagem para mostrar
+              const img = document.getElementById('popup-image');
+              if (img && c.imageUrl) {
+                  img.src = c.imageUrl;
+                  img.style.display = 'block';
+              } else if (img) {
+                  img.style.display = 'none';
+              }
+              
+              document.getElementById('popup-modal').style.display = 'block'; 
+          } 
+      }).getConfiguracaoPopUp(); 
+  }
+  // =========================================================
+
+  function loadMessageSender() { const sel = document.getElementById('msg-recipient-user'); const fill = (list) => { sel.innerHTML = '<option value="">-</option>'+list.map(u => `<option value="${u[0]}">${u[1]}</option>`).join(''); }; if (adminUserListCache.length > 0) fill(adminUserListCache); else google.script.run.withSuccessHandler(l => { adminUserListCache=l; fill(l); }).getAllUsers(loggedUser.email); }
+  function sendMessage() { const dest = document.getElementById('msg-recipient-user').value; const msg = document.getElementById('msg-content').value; if (!dest || !msg) return; google.script.run.withSuccessHandler(r => { showMessage('msg-send-message', r.message, r.status==='sucesso'); if(r.status==='sucesso') document.getElementById('msg-content').value = ''; }).sendMessageToUser(loggedUser.email, dest, msg); }
+  function loadMyMessages() { const container = document.getElementById('my-messages-container'); google.script.run.withSuccessHandler(msgs => { if (msgs.length===0) { container.innerHTML='<p class="no-messages">Sem mensagens.</p>'; return; } let html = ''; msgs.forEach(m => { html += `<div class="message-item"><div class="message-header">${m[1]} <span>${m[0]}</span></div><div class="message-body">${m[2]}</div></div>`; }); container.innerHTML = html; }).getMessagesForUser(loggedUser.email); }
+  function submitChangePassword() { const old = document.getElementById('cp-old-password').value; const newP = document.getElementById('cp-new-password').value; google.script.run.withSuccessHandler(r => showMessage('change-password-message', r.message, r.status==='sucesso')).changeUserPassword(loggedUser.email, old, newP); }
+  function openMessageNotificationTab() { document.getElementById('message-notification-modal').style.display='none'; openTab('minha-conta'); }
+
+  /** * =================================================================
+   * 9. NOTIFICAÇÕES E WAKE LOCK
+   * =================================================================
+   */
+  async function requestWakeLock() { if ('wakeLock' in navigator && wakeLock === null) { try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {} } }
+  function releaseWakeLock() { if (wakeLock) { wakeLock.release(); wakeLock = null; } }
+  function handleWakeLockVisibility() { if (document.visibilityState === 'visible') requestWakeLock(); }
+
+  function startOSNotifier() { google.script.run.withSuccessHandler(id => { lastKnownOSID = id; if (osCheckInterval) clearInterval(osCheckInterval); osCheckInterval = setInterval(checkForNewOS, SLOW_INTERVAL); }).getLatestOSID(); }
+  function checkForNewOS() { if(unreadOSAlarm) return; google.script.run.withSuccessHandler(id => { if (id > lastKnownOSID) { showToast(`🔔 Nova OS #${id}!`); startAudioLoop(); lastKnownOSID = id; if (document.getElementById('painel-os').classList.contains('active')) loadPainelOS(); } }).getLatestOSID(); }
+  function startUpdateNotifier() { if (updateCheckInterval) clearInterval(updateCheckInterval); updateCheckInterval = setInterval(checkForUpdates, SLOW_INTERVAL); }
+  function checkForUpdates() { if(remoteAssignmentAlarm) return; google.script.run.withSuccessHandler(r => { if (r.updateFound) { lastUpdateCheckTimestamp = r.newTimestamp; showToast(r.updateType==='remote' ? '🚨 OS atualizada remotamente!' : '📝 Atualização local.'); if (r.updateType==='remote') startRemoteAudioLoop(); if (document.getElementById('painel-os').classList.contains('active')) loadPainelOS(); } }).getUpdatesForTecnico(loggedUser.nome, lastUpdateCheckTimestamp); }
+
+  function startAudioLoop() { 
+      if (loggedUser && loggedUser.nivel.toLowerCase() === 'gerente') return; // Bloqueio para gerente
+      saveAlarmState(true); 
+      if (audioLoopInterval) return; 
+      playNotificationSound(0.8, 880); 
+      audioLoopInterval = setInterval(() => playNotificationSound(0.8, 880), AUDIO_INTERVAL); 
+  }
+  
+  function startRemoteAudioLoop() { 
+      if (loggedUser && loggedUser.nivel.toLowerCase() === 'gerente') return; // Bloqueio para gerente
+      saveRemoteAlarmState(true); 
+      if (remoteAudioLoopInterval) return; 
+      playNotificationSound(1, 1200); 
+      remoteAudioLoopInterval = setInterval(() => playNotificationSound(1, 1200), AUDIO_INTERVAL); 
+  }
+  
+  function stopAudioLoop() { saveAlarmState(false); clearInterval(audioLoopInterval); audioLoopInterval=null; }
+  function stopRemoteAudioLoop() { saveRemoteAlarmState(false); clearInterval(remoteAudioLoopInterval); remoteAudioLoopInterval=null; }
+
+  // --- Sistema de Notificação de Mensagens Privadas (Admin) ---
+  function startPrivateMessageNotifier() {
+      // Verifica imediatamente
+      checkForPrivateMessages();
+      // Inicia intervalo de 15 segundos
+      if (privateMsgCheckInterval) clearInterval(privateMsgCheckInterval);
+      privateMsgCheckInterval = setInterval(checkForPrivateMessages, 15000); 
+  }
+
+  function stopPrivateMessageNotifier() {
+      if (privateMsgCheckInterval) clearInterval(privateMsgCheckInterval);
+      privateMsgCheckInterval = null;
+      stopPrivateMsgAudio();
+  }
+
+  function checkForPrivateMessages() {
+      if (!loggedUser) return;
+      google.script.run.withSuccessHandler(hasUnread => {
+         if (hasUnread) {
+             // Se tem msg não lida, mostra aviso e toca som
+             const modal = document.getElementById('message-notification-modal');
+             // Só reativa o loop se o modal não estiver visível (evita reiniciar loop se usuário já está ouvindo)
+             if (modal.style.display !== 'block') {
+                 modal.style.display = 'block';
+                 startPrivateMsgAudioLoop();
+             }
+         }
+      }).checkForUnreadMessages(loggedUser.email);
+  }
+
+  function startPrivateMsgAudioLoop() {
+      if (loggedUser && loggedUser.nivel.toLowerCase() === 'gerente') return; // Bloqueio para gerente
+      if (privateMsgAudioLoop) return; // Já está tocando
+      
+      // Toca a primeira vez
+      playNotificationSound(1, 1500); // Frequência mais alta para diferenciar de OS
+      
+      // Loop a cada 10 segundos
+      privateMsgAudioLoop = setInterval(() => {
+          playNotificationSound(1, 1500);
+      }, AUDIO_INTERVAL);
+  }
+
+  function stopPrivateMsgAudio() {
+      if (privateMsgAudioLoop) {
+          clearInterval(privateMsgAudioLoop);
+          privateMsgAudioLoop = null;
+      }
+  }
+
+  function playNotificationSound(vol, freq) { try { const ctx = new (window.AudioContext || window.webkitAudioContext)(); const osc = ctx.createOscillator(); const gain = ctx.createGain(); osc.connect(gain); gain.connect(ctx.destination); osc.frequency.value = freq; gain.gain.value = vol; osc.start(); setTimeout(() => osc.stop(), 200); } catch(e) {} }
+  function showToast(msg) { const t = document.getElementById('os-toast'); t.innerHTML = `${msg} <button onclick="this.parentElement.className='toast'">x</button>`; t.className = 'toast show'; }
+</script>
