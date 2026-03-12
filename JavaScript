@@ -1,131 +1,406 @@
+
 <script>
-  /**
-   * =================================================================
-   * S.I.M - SISTEMA INTERNO DE MANUTENÇÃO (JAVASCRIPT CLIENT-SIDE)
-   * =================================================================
-   */
+/**
+ * =================================================================
+ * S.I.M - SISTEMA INTERNO DE MANUTENÇÃO (JAVASCRIPT CLIENT-SIDE)
+ * Versão: 2.20 (Dashboard com Gráfico de Setores)
+ * =================================================================
+ */
+'use strict';
 
-  // --- Variáveis Globais de Estado ---
-  let loggedUser = null; 
-  let setoresList = [];
-  let tecnicosList = [];
-  let currentOSId = null; 
-  
-  // Estado dos Filtros do Painel OS
-  let currentPainelFilters = {
-    status: "Ativas", 
-    setor: "Todos",   
-    data: "Todas",
-    tecnico: "Todos"
-  };
-  
-  // --- Variáveis do Notificador de OS ---
-  const FAST_INTERVAL = 40000; 
-  const SLOW_INTERVAL = 60000; 
-  const AUDIO_INTERVAL = 30000; // Intervalo de 30 segundos para sons
-  
-  let osCheckInterval = null; 
-  let updateCheckInterval = null; 
-  let audioLoopInterval = null; 
-  let remoteAudioLoopInterval = null; 
-  let wakeLock = null; 
-  
-  // --- Variáveis do Notificador de Mensagens Privadas (Admin) ---
-  let privateMsgCheckInterval = null;
-  let privateMsgAudioLoop = null;
+/**
+ * -----------------------------------------------------------------
+ * MÓDULO 0.1: COMPONENTES UI PERSONALIZADOS
+ * -----------------------------------------------------------------
+ */
+class DateRangePicker {
+    constructor(containerId, defaultKey = 'last7days', onChangeCallback = null) {
+        this.container = document.getElementById(containerId);
+        if (!this.container) return;
+        this.onChangeCallback = onChangeCallback;
 
-  // --- Chaves de Sessão (LocalStorage) ---
-  const STORAGE_API = localStorage; 
-  const SESSION_KEY = 'os_user_session'; 
-  const ALARM_KEY = 'os_alarm_active'; 
-  const REMOTE_ALARM_KEY = 'os_remote_alarm_active'; 
-  const CHAT_UNREAD_KEY = 'sim_chat_unread'; // Chave para persistência de msg não lida
+        this.currentRange = {
+            key: defaultKey,
+            ...this.calculateDates(defaultKey)
+        };
+        this.predefinedRanges = {
+            'today': 'Hoje', 
+            'yesterday': 'Ontem', 
+            'last7days': 'Últimos 7 dias',
+            'last30days': 'Últimos 30 dias', 
+            'last90days': 'Últimos 90 dias',
+            'last6months': 'Últimos 6 meses',
+            'last12months': 'Últimos 12 meses',
+            'thismonth': 'Este Mês', 
+            'lastmonth': 'Mês Passado',
+            'thisyear': 'Este Ano',
+            'lastyear': 'Ano Passado',
+            'all': 'Desde o início', 
+            'custom': 'Personalizado'
+        };
 
-  let lastKnownOSID = 0; 
-  let lastUpdateCheckTimestamp = new Date().toISOString(); 
-  let unreadOSAlarm = false;
-  let remoteAssignmentAlarm = false;
+        this.render();
+        // Atribuição dos elementos DEVE vir antes de updateDisplay
+        this.displayBtn = this.container.querySelector('.date-range-display-btn');
+        this.dropdown = this.container.querySelector('.date-range-dropdown');
+        this.customRangeContainer = this.container.querySelector('.custom-range');
+        this.startDateInput = this.container.querySelector('.custom-start-date');
+        this.endDateInput = this.container.querySelector('.custom-end-date');
 
-  // --- Variáveis de Upload ---
-  let filesToUpload = []; 
-  let modalFilesToUpload = []; 
-  
-  // --- Variáveis Admin e Rotina ---
-  let currentRotinaRowIndex = null;
-  let adminUserListCache = [];
-
-  // --- CHAT GLOBAL (Variáveis de Serviço) ---
-  let chatPollingInterval = null;   
-  let isChatWindowOpen = false; // Controla se a janela flutuante está visível
-  let lastMessageSignature = ""; // Substitui o JSON para comparação mais estável
-  let cachedChatMessages = [];
-  let chatAudioLoopInterval = null; // Controle do loop de som do chat      
-
-  // --- NOVO: Anexos do Chat
-  let chatAttachments = []; // array de { base64, name, size, isImage }
-  
-  
-  /** * =================================================================
-   * 1. INICIALIZAÇÃO E SESSÃO
-   * =================================================================
-   */
-  document.addEventListener('DOMContentLoaded', function() {
-    
-    // Configura UI dinâmica para Relatórios (Rotinas)
-    setupRelatoriosDynamicUI();
-
-    // Tenta carregar sessão existente
-    const savedSession = loadSession();
-    
-    // Listener de tecla Enter para Login
-    const enterLogin = (e) => { if (e.key === 'Enter') handleLogin(); };
-    const nomeInput = document.getElementById('login-nome');
-    const senhaInput = document.getElementById('login-senha');
-    if (nomeInput) nomeInput.addEventListener('keydown', enterLogin);
-    if (senhaInput) senhaInput.addEventListener('keydown', enterLogin);
-    
-    // Restaura sessão se existir
-    if (savedSession) {
-        restoreSession(savedSession);
+        this.updateDisplay();
+        
+        this.setupEventListeners();
+        document.addEventListener('click', this.handleDocumentClick.bind(this));
     }
 
-    // Listeners de Navegação (Abas e Sub-abas)
-    const tabsContainer = document.querySelector('.tabs-container');
-    if (tabsContainer) {
-        tabsContainer.addEventListener('click', function(event) {
-            // Clique em aba principal
-            if (event.target.classList.contains('tab-button')) {
-                openTab(event.target.dataset.tab);
-            }
-            // Clique em sub-aba (dentro de um conteúdo)
-            if (event.target.classList.contains('sub-tab-button')) {
-                const parentTabContent = event.target.closest('.tab-content');
-                if (parentTabContent) {
-                    openSubTab(event.target.dataset.subTab, parentTabContent.id);
-                }
+    render() {
+        const predefinedButtons = Object.keys(this.predefinedRanges)
+            .filter(key => key !== 'custom' && key !== 'all')
+            .map(key => `<button class="predefined-btn" data-key="${key}">${this.predefinedRanges[key]}</button>`)
+            .join('');
+
+        this.container.innerHTML = `
+            <button class="date-range-display-btn"></button>
+            <div class="date-range-dropdown">
+                <div class="predefined-ranges">
+                    ${predefinedButtons}
+                    <button class="predefined-btn" data-key="all">${this.predefinedRanges['all']}</button>
+                    <button class="predefined-btn" data-key="custom">${this.predefinedRanges['custom']}</button>
+                </div>
+                <div class="custom-range">
+                    <input type="date" class="custom-start-date">
+                    <span>até</span>
+                    <input type="date" class="custom-end-date">
+                </div>
+            </div>
+        `;
+    }
+
+    setupEventListeners() {
+        const applyCustomDateChange = () => {
+            this.currentRange = {
+                key: 'custom',
+                startDate: this.startDateInput.value,
+                endDate: this.endDateInput.value
+            };
+            this.updateDisplay();
+            if (this.onChangeCallback) this.onChangeCallback();
+        };
+
+        this.startDateInput.addEventListener('change', applyCustomDateChange);
+        this.endDateInput.addEventListener('change', applyCustomDateChange);
+
+        this.displayBtn.addEventListener('click', () => {
+            this.container.classList.toggle('open');
+            // Também tenta alternar no pai se existir para compatibilidade com CSS antigo
+            if(this.container.parentElement.classList.contains('date-range-container')) {
+                this.container.parentElement.classList.toggle('open');
             }
         });
+        
+        this.container.querySelectorAll('.predefined-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => this.handlePredefinedClick(e.target.dataset.key));
+        });
+    }
+
+    handlePredefinedClick(key) {
+        this.currentRange.key = key;
+        if (key === 'custom') {
+            this.customRangeContainer.classList.add('active');
+            this.updateActiveButton();
+        } else {
+            this.customRangeContainer.classList.remove('active');
+            this.currentRange = { key, ...this.calculateDates(key) };
+            this.updateDisplay();
+            this.container.classList.remove('open');
+            if(this.container.parentElement.classList.contains('date-range-container')) {
+                this.container.parentElement.classList.remove('open');
+            }
+            if (this.onChangeCallback) this.onChangeCallback();
+        }
+    }
+
+    handleDocumentClick(e) {
+        if (!this.container.contains(e.target)) {
+            this.container.classList.remove('open');
+            if(this.container.parentElement.classList.contains('date-range-container')) {
+                this.container.parentElement.classList.remove('open');
+            }
+        }
+    }
+
+    updateDisplay() {
+        if (!this.displayBtn) return;
+        if (this.currentRange.key === 'custom') {
+            if (this.currentRange.startDate && this.currentRange.endDate) {
+                 const formattedStart = formatDateToDDMMYYYY(this.currentRange.startDate);
+                 const formattedEnd = formatDateToDDMMYYYY(this.currentRange.endDate);
+                 this.displayBtn.textContent = `${formattedStart} - ${formattedEnd}`;
+            } else {
+                 this.displayBtn.textContent = 'Selecione um intervalo';
+            }
+        } else {
+            this.displayBtn.textContent = this.predefinedRanges[this.currentRange.key];
+        }
+        this.updateActiveButton();
     }
     
-    // Listeners para fechar Modais (clique no X ou fora da janela)
-    setupModalListeners('os-modal');
-    setupModalListeners('user-admin-modal');
-    setupModalListeners('rotina-modal');
-    setupModalListeners('popup-modal');
-    setupModalListeners('message-notification-modal'); 
-    setupModalListeners('view-message-modal');
+    updateActiveButton() {
+        this.container.querySelectorAll('.predefined-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.key === this.currentRange.key);
+        });
+    }
 
-    // Wake Lock (Manter tela ligada se possível)
-    window.addEventListener('focus', () => { if (loggedUser) requestWakeLock(); });
-    
-    // Tenta carregar aviso de administrador na tela de login
-    setTimeout(() => {
-        if (typeof google !== 'undefined' && google.script) loadPopUpOnLoginScreen();
-    }, 500);
-    
-    // Listener para envio de chat com tecla Enter
+    calculateDates(key) {
+        const now = new Date();
+        let start = new Date();
+        let end = new Date();
+        
+        switch (key) {
+            case 'today':
+                start.setHours(0, 0, 0, 0); end.setHours(23, 59, 59, 999); break;
+            case 'yesterday':
+                start.setDate(now.getDate() - 1); start.setHours(0, 0, 0, 0);
+                end.setDate(now.getDate() - 1); end.setHours(23, 59, 59, 999); break;
+            case 'last7days':
+                start.setDate(now.getDate() - 6); start.setHours(0, 0, 0, 0); end.setHours(23, 59, 59, 999); break;
+            case 'last30days':
+                start.setDate(now.getDate() - 29); start.setHours(0, 0, 0, 0); end.setHours(23, 59, 59, 999); break;
+            case 'thismonth':
+                start = new Date(now.getFullYear(), now.getMonth(), 1); end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999); break;
+            case 'lastmonth':
+                start = new Date(now.getFullYear(), now.getMonth() - 1, 1); end = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999); break;
+            case 'last90days':
+                start.setDate(now.getDate() - 89); start.setHours(0, 0, 0, 0); end.setHours(23, 59, 59, 999); break;
+            case 'last6months':
+                start.setMonth(now.getMonth() - 6); start.setHours(0, 0, 0, 0); end.setHours(23, 59, 59, 999); break;
+            case 'last12months':
+                start.setFullYear(now.getFullYear() - 1); start.setHours(0, 0, 0, 0); end.setHours(23, 59, 59, 999); break;
+            case 'thisyear':
+                start = new Date(now.getFullYear(), 0, 1); end = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999); break;
+            case 'lastyear':
+                start = new Date(now.getFullYear() - 1, 0, 1); end = new Date(now.getFullYear() - 1, 11, 31, 23, 59, 59, 999); break;
+            case 'all':
+                return { startDate: null, endDate: null };
+        }
+        return { startDate: getLocalDateString(start), endDate: getLocalDateString(end) };
+    }
+
+    getDateRange() {
+        return this.currentRange;
+    }
+}
+
+/**
+ * -----------------------------------------------------------------
+ * MÓDULO 0: ESTADO GLOBAL, CONSTANTES E CONFIGURAÇÕES
+ * -----------------------------------------------------------------
+ */
+// Shim para google.script.run em ambiente de desenvolvimento (Express)
+if (typeof google === 'undefined' || !google.script) {
+    window.google = window.google || {};
+    window.google.script = {
+        run: {
+            withSuccessHandler: function(callback) {
+                this._successHandler = callback;
+                return this;
+            },
+            withFailureHandler: function(callback) {
+                this._failureHandler = callback;
+                return this;
+            },
+            _call: function(functionName, ...args) {
+                console.log(`[Mock] Chamando ${functionName}`, args);
+                fetch('/api/gs/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ functionName, args })
+                })
+                .then(res => res.json())
+                .then(res => {
+                    if (res.success) {
+                        if (this._successHandler) this._successHandler(res.data);
+                    } else {
+                        // Se for getDashboardStatistics e falhar, podemos retornar dados mockados para teste no preview
+                        if (functionName === 'getDashboardStatistics') {
+                            const mockStats = {
+                                total: 150, abertas: 45, andamento: 30, concluidas: 70, pendente: 5,
+                                avgResolutionTime: '2d 4h',
+                                chartData: [
+                                    ['Status', 'Quantidade', { role: 'style' }],
+                                    ['Aberta', 45, 'color: #38bdf8'],
+                                    ['Andamento', 30, 'color: #f59e0b'],
+                                    ['Pendente', 5, 'color: #ef4444'],
+                                    ['Concluída', 70, 'color: #2cb67d']
+                                ],
+                                sectorChartData: [['Setor', 'Quantidade'], ['TI', 40], ['Manutenção', 60], ['Limpeza', 30], ['Outros', 20]],
+                                techPerformanceData: [['Técnico', 'O.S. Atendidas', 'Registos no Diário'], ['João', 20, 15], ['Maria', 25, 22], ['Pedro', 18, 10]],
+                                yesterdayTechPerformanceChartData: [['Técnico', 'Concluídas', 'Pendentes', 'Em Andamento'], ['João', 5, 2, 1], ['Maria', 8, 1, 2], ['Pedro', 4, 3, 0]]
+                            };
+                            if (this._successHandler) this._successHandler(mockStats);
+                        } else if (this._failureHandler) {
+                            this._failureHandler(res.error);
+                        }
+                    }
+                })
+                .catch(err => {
+                    if (this._failureHandler) this._failureHandler(err);
+                });
+            },
+            verificarLogin: function(n, s) { this._call('verificarLogin', n, s); },
+            getInitialData: function(e) { this._call('getInitialData', e); },
+            getDashboardStatistics: function(e, d1, d2) { this._call('getDashboardStatistics', e, d1, d2); },
+            filtrarOSPainel: function(f, p, s) { this._call('filtrarOSPainel', f, p, s); },
+            getOSById: function(id) { this._call('getOSById', id); },
+            atualizarOS: function(...args) { this._call('atualizarOS', ...args); },
+            gerarOS: function(d) { this._call('gerarOS', d); },
+            getRelatorioOS: function(f) { this._call('getRelatorioOS', f); },
+            filtrarRotinas: function(f) { this._call('filtrarRotinas', f); },
+            getRotinaByRowIndex: function(i) { this._call('getRotinaByRowIndex', i); },
+            atualizarRotina: function(...args) { this._call('atualizarRotina', ...args); },
+            excluirRotina: function(...args) { this._call('excluirRotina', ...args); },
+            getAllUsers: function(e) { this._call('getAllUsers', e); },
+            getActionLogs: function(e, f) { this._call('getActionLogs', e, f); },
+            saveUser: function(e, d) { this._call('saveUser', e, d); },
+            deleteUser: function(e, u) { this._call('deleteUser', e, u); },
+            sendMessageToUser: function(...args) { this._call('sendMessageToUser', ...args); },
+            changeUserPassword: function(...args) { this._call('changeUserPassword', ...args); },
+            getMessagesForUser: function(e) { this._call('getMessagesForUser', e); },
+            markMessagesAsRead: function(e) { this._call('markMessagesAsRead', e); },
+            saveConfiguracaoPopUp: function(e, c) { this._call('saveConfiguracaoPopUp', e, c); },
+            getConfiguracaoPopUp: function() { this._call('getConfiguracaoPopUp'); },
+            getGlobalChatHistory: function(e) { this._call('getGlobalChatHistory', e); },
+            sendChatMessageAdvanced: function(...args) { this._call('sendChatMessageAdvanced', ...args); },
+            checkForUnreadMessages: function(e) { this._call('checkForUnreadMessages', e); },
+            checkForAssignedOS: function(n, id) { this._call('checkForAssignedOS', n, id); },
+            getOverdueOS: function() { this._call('getOverdueOS'); },
+            marcarOSComoVista: function(id, n) { this._call('marcarOSComoVista', id, n); }
+        }
+    };
+}
+
+let loggedUser = null;
+let setoresList = [];
+let tecnicosList = [];
+let allUserNames = [];
+let currentOSId = null;
+let audioCtx = null;
+let wakeLock = null;
+let lastUpdateCheckTimestamp = new Date().toISOString();
+let remoteAssignmentAlarm = false;
+let currentRotinaRowIndex = null;
+let adminUserListCache = [];
+let filesToUpload = [];
+let modalFilesToUpload = [];
+let statsDatePicker, osReportDatePicker, logsReportDatePicker, diarioDatePicker, rotinasReportDatePicker;
+
+let currentPainelFilters = { status: "Ativas", setor: "Todos", data: "Todas", tecnico: "Todos", keyword: "" };
+let osPaginationState = { currentPage: 1, pageSize: 50, totalItems: 0 };
+
+let osCheckInterval = null;
+let updateCheckInterval = null;
+let audioLoopInterval = null;
+let remoteAudioLoopInterval = null;
+let alarmingOSIds = [];
+let privateMsgCheckInterval = null;
+let privateMsgAudioLoop = null;
+let overdueCheckInterval = null;
+let overdueAudioLoopInterval = null;
+let alarmingOverdueOSIds = [];
+let assignmentCheckInterval = null;
+let assignmentAudioLoopInterval = null;
+
+let chatPollingInterval = null;
+let isChatWindowOpen = false;
+let lastChatMessageId = 0;
+let cachedChatMessages = [];
+let chatAudioLoopInterval = null;
+let chatReplyContext = null;
+let chatAttachments = [];
+
+let highPriorityInterval = null;
+let highPriorityAudioLoop = null;
+let activeHighPriorityOS = null;
+
+const FAST_INTERVAL = 40000;
+const SLOW_INTERVAL = 60000;
+const AUDIO_INTERVAL = 30000;
+const STORAGE_API = localStorage;
+const SESSION_KEY = 'os_user_session';
+const REMOTE_ALARM_KEY = 'os_remote_alarm_active';
+const CHAT_UNREAD_KEY = 'sim_chat_unread';
+const DRAFT_OS_KEY = 'sim_draft_os';
+const HP_ALARM_KEY = 'sim_high_priority_alarm_os';
+const HP_SEEN_KEY = 'sim_seen_high_priority_os';
+const VIEWED_OS_KEY = 'sim_viewed_os_ids';
+const ASSIGNED_OS_ID_KEY = 'sim_last_assigned_os_id';
+
+let isChartsLoaded = false;
+
+/**
+ * -----------------------------------------------------------------
+ * MÓDULO 1: INICIALIZAÇÃO, SESSÃO E AUTENTICAÇÃO
+ * -----------------------------------------------------------------
+ */
+document.addEventListener('DOMContentLoaded', function() {
+    try {
+        if (typeof google !== 'undefined' && google.charts) {
+            google.charts.load('current', {
+                packages:['corechart'],
+                callback: () => { isChartsLoaded = true; }
+            });
+        }
+    } catch (e) { console.error("Erro ao carregar Google Charts:", e); }
+
+    try { setupGlobalEventListeners(); } catch (e) { console.warn("Aviso em Listeners Globais", e); }
+    try { setupAllModalListeners(); } catch (e) { console.warn("Aviso em Listeners de Modal", e); }
+    try { setupProgramasModalListeners(); } catch (e) { console.warn("Aviso em Listeners de Programas", e); }
+    try { setupChatWindowDrag(); } catch (e) { console.warn("Aviso no arrasto do Chat", e); }
+
+    try {
+        const savedSession = loadSession();
+        if (savedSession) {
+            restoreSession(savedSession);
+        } else {
+            setTimeout(() => {
+                if (typeof google !== 'undefined' && google.script) {
+                    loadPopUpOnLoginScreen();
+                }
+            }, 500);
+        }
+    } catch (e) { 
+        console.error("Falha ao processar sessão salva:", e); 
+    }
+
+    window.addEventListener('focus', () => {
+        if (loggedUser) requestWakeLock();
+    });
+});
+
+function setupGlobalEventListeners() {
+    const enterLogin = (e) => {
+        if (e.key === 'Enter') handleLogin();
+    };
+    document.getElementById('login-nome')?.addEventListener('keydown', enterLogin);
+    document.getElementById('login-senha')?.addEventListener('keydown', enterLogin);
+
+    document.querySelector('.tabs')?.addEventListener('click', (event) => {
+      const tabButton = event.target.closest('.tab-button');
+      if (tabButton && tabButton.dataset.tab) openTab(tabButton.dataset.tab);
+    });
+
+    document.querySelectorAll('.sub-tabs').forEach(subTabNav => {
+      subTabNav.addEventListener('click', (event) => {
+        const subTabButton = event.target.closest('.sub-tab-button');
+        if (subTabButton) {
+            const parentTabContent = subTabButton.closest('.tab-content');
+            if (parentTabContent) openSubTab(subTabButton.dataset.subTab, parentTabContent.id);
+        }
+      });
+    });
+
     const chatInput = document.getElementById('chat-input-text');
-    if(chatInput) {
+    if (chatInput) {
         chatInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -133,1343 +408,2259 @@
             }
         });
     }
-    
-    // Listener de foco na janela de chat (para garantir que o som pare)
+
     const chatWindow = document.getElementById('chat-floating-window');
-    if (chatWindow) {
-        chatWindow.addEventListener('click', () => { stopChatAlarm(); });
-        chatWindow.addEventListener('focusin', () => { stopChatAlarm(); });
-    }
-  });
+    chatWindow?.addEventListener('click', stopChatAlarm);
+    chatWindow?.addEventListener('focusin', stopChatAlarm);
+}
 
-  // Funções auxiliares de sessão
-  function saveSession(userData) { try { STORAGE_API.setItem(SESSION_KEY, JSON.stringify(userData)); } catch (e) {} }
-  function loadSession() { try { return JSON.parse(STORAGE_API.getItem(SESSION_KEY)); } catch (e) { return null; } }
-  function clearSession() { 
-      STORAGE_API.removeItem(SESSION_KEY); 
-      STORAGE_API.removeItem(ALARM_KEY); 
-      STORAGE_API.removeItem(REMOTE_ALARM_KEY); 
-      STORAGE_API.removeItem(CHAT_UNREAD_KEY);
-  }
-  
-  function saveAlarmState(isActive) { try{ STORAGE_API.setItem(ALARM_KEY, JSON.stringify(isActive)); unreadOSAlarm=isActive;}catch(e){} }
-  function loadAlarmState() { try{ unreadOSAlarm=JSON.parse(STORAGE_API.getItem(ALARM_KEY)); return unreadOSAlarm;}catch(e){return false;} }
-  
-  function saveRemoteAlarmState(isActive) { try{ STORAGE_API.setItem(REMOTE_ALARM_KEY, JSON.stringify(isActive)); remoteAssignmentAlarm=isActive;}catch(e){} }
-  function loadRemoteAlarmState() { try{ remoteAssignmentAlarm=JSON.parse(STORAGE_API.getItem(REMOTE_ALARM_KEY)); return remoteAssignmentAlarm;}catch(e){return false;} }
+function saveSession(userData) {
+    try { STORAGE_API.setItem(SESSION_KEY, JSON.stringify(userData)); } catch (e) {}
+}
 
-  // Restaura a interface para o estado "Logado"
-  function restoreSession(sessionData) {
-      loggedUser = sessionData;
-      const userDisplay = document.getElementById('user-display');
-      if (userDisplay) userDisplay.textContent = sessionData.nome;
+function loadSession() {
+    try { return JSON.parse(STORAGE_API.getItem(SESSION_KEY)); } catch (e) { return null; }
+}
 
-      // Troca telas
-      document.getElementById('login-container').style.display = 'none';
-      document.getElementById('main-panel').style.display = 'block';
-      
-      // MOSTRAR O BOTÃO FLUTUANTE DO CHAT
-      document.getElementById('chat-fab').style.display = 'flex';
+function clearSession() {
+    [SESSION_KEY, REMOTE_ALARM_KEY, CHAT_UNREAD_KEY, DRAFT_OS_KEY, HP_ALARM_KEY, HP_SEEN_KEY, VIEWED_OS_KEY].forEach(key => {
+        try { STORAGE_API.removeItem(key); } catch (e) {}
+    });
+    clearOSDraft();
+}
 
-      // Configura menu baseado no nível de acesso
-      configureAcessLevel(sessionData.nivel);
-      
-      // Inicia serviço de Chat em segundo plano
-      startChatBackgroundService();
-
-      // Inicia notificadores
-      startPrivateMessageNotifier(); // Notificador de Mensagens Privadas
-      if (['tecnico', 'admin', 'gerente'].includes(sessionData.nivel.toLowerCase())) {
-          startOSNotifier(); 
-          startUpdateNotifier(); 
-      }
-      
-      requestWakeLock();
-      document.addEventListener('visibilitychange', handleWakeLockVisibility);
-
-      loadDropdownData(); // Carrega listas de Setores e Técnicos
-      
-      // Abre aba padrão
-      let defaultTab = 'gerar-os';
-      if (sessionData.nivel.toLowerCase() === 'tecnico') defaultTab = 'painel-os';
-      openTab(defaultTab);
-      
-      // Restaura alarmes sonoros se estavam ativos (ex: refresh da página)
-      if (loadAlarmState()) startAudioLoop(); 
-      if (loadRemoteAlarmState()) startRemoteAudioLoop(); 
-  }
-
-  // Lógica de Login
-  function handleLogin() {
-    const nome = document.getElementById('login-nome').value.trim();
-    const senha = document.getElementById('login-senha').value;
+function restoreSession(sessionData) {
+    loggedUser = sessionData;
     
+    const userDisplay = document.getElementById('user-display');
+    if(userDisplay) userDisplay.textContent = sessionData.nome;
+    
+    document.getElementById('login-container').style.display = 'none';
+    document.getElementById('main-panel').style.display = 'block';
+    
+    const chatFab = document.getElementById('chat-fab');
+    if(chatFab) chatFab.style.display = 'flex';
+    
+    configureAcessLevel(sessionData.nivel);
+    
+    const osForm = document.getElementById('os-form');
+    if(osForm) osForm.innerHTML = '<p>Carregando dados iniciais...</p>';
+    
+    const osTableTbody = document.querySelector('#os-table tbody');
+    if(osTableTbody) osTableTbody.innerHTML = '<tr><td colspan="9">Carregando...</td></tr>';
+
+    showLoading();
+    
+    if (typeof google !== 'undefined' && google.script) {
+        google.script.run
+            .withSuccessHandler(handleInitialData)
+            .withFailureHandler(err => {
+                hideLoading();
+                alert("Falha ao carregar dados. Por favor, recarregue a página.");
+            })
+            .getInitialData(sessionData.email);
+    }
+
+    requestWakeLock();
+    document.addEventListener('visibilitychange', handleWakeLockVisibility);
+}
+
+function handleInitialData(data) {
+    hideLoading();
+    if (data.error) {
+        alert("Erro no servidor ao buscar dados: " + data.error);
+        return;
+    }
+
+    setoresList = data.setores || [];
+    tecnicosList = data.tecnicos || [];
+    allUserNames = data.allUserNames || [];
+
+    renderGerarOSForm();
+    if (['admin', 'gerente', 'tecnico', 'recepcao'].includes(loggedUser.nivel.toLowerCase())) {
+        loadPainelOSFilters();
+    }
+    
+    setupDatePickers();
+
+    if (data.chatHistory) {
+        cachedChatMessages = data.chatHistory;
+        const newestMsg = findNewestMessage(cachedChatMessages);
+        lastChatMessageId = newestMsg ? newestMsg.id : 0;
+        if (isChatWindowOpen) renderChatDOM(cachedChatMessages, true);
+    }
+
+    if (data.painelOS) renderOSDataTable(data.painelOS);
+    
+    let defaultTab = 'gerar-os';
+    const nivel = loggedUser.nivel.toLowerCase();
+    
+    if (['admin', 'gerente'].includes(nivel)) {
+        defaultTab = 'dashboard';
+    } else if (['tecnico', 'recepcao'].includes(nivel)) {
+        defaultTab = 'painel-os';
+    }
+    openTab(defaultTab, true);
+
+    if (defaultTab === 'dashboard') {
+        loadStatistics();
+    }
+
+    if (data.hasUnreadPrivateMessages) {
+        const bell = document.getElementById('private-message-bell');
+        if(bell) bell.style.display = 'flex';
+    }
+
+    if (data.expirationWarningDays) {
+        const days = data.expirationWarningDays;
+        showToast(`<strong>ATENÇÃO:</strong> A licença do sistema expira em <strong>${days} dia${days > 1 ? 's' : ''}</strong>.`, [], 'high-priority');
+    }
+    
+    if (data.expirationDateFormatted) {
+        const valDate = document.getElementById('system-validity-date');
+        if(valDate) valDate.textContent = data.expirationDateFormatted;
+    }
+
+    startPollingServices();
+}
+
+function handleLogin() {
+    const nomeEl = document.getElementById('login-nome');
+    const senhaEl = document.getElementById('login-senha');
+
+    if (!nomeEl || !senhaEl) return;
+
+    const nome = nomeEl.value.trim();
+    const senha = senhaEl.value;
+
     if (!nome || !senha) {
-      showMessage('login-message', 'Preencha Nome e Senha.', false);
-      return;
+        showMessage('login-message', 'Preencha Nome e Senha.', false);
+        return;
     }
-    
-    const loginBtn = document.querySelector('#login-container .btn-primary');
+
+    const loginBtn = document.querySelector('#login-container .btn-primary') || document.querySelector('#login-container button');
     if(loginBtn) loginBtn.textContent = 'A verificar...';
+    showLoading();
 
-    google.script.run
-      .withSuccessHandler(response => {
-        if(loginBtn) loginBtn.textContent = 'Entrar';
-        if (response.status === 'sucesso') {
-          loggedUser = response;
-          saveSession(response);
-          restoreSession(response);
-        } else {
-          showMessage('login-message', response.mensagem, false);
-        }
-      })
-      .withFailureHandler(err => {
-         if(loginBtn) loginBtn.textContent = 'Entrar';
-         showMessage('login-message', 'Erro de conexão.', false);
-      })
-      .verificarLogin(nome, senha);
-  }
+    if (typeof google !== 'undefined' && google.script) {
+        google.script.run
+            .withSuccessHandler(response => {
+                hideLoading();
+                if(loginBtn) loginBtn.textContent = 'Entrar';
+                if (response && response.status === 'sucesso') {
+                    if (!audioCtx) {
+                        try { audioCtx = new(window.AudioContext || window.webkitAudioContext)(); } 
+                        catch (e) { console.warn("Web Audio API não suportada."); }
+                    }
+                    loggedUser = response;
+                    saveSession(response);
+                    restoreSession(response);
+                } else {
+                    showMessage('login-message', response ? response.mensagem : 'Usuário ou senha incorretos.', false);
+                }
+            })
+            .withFailureHandler(err => {
+                hideLoading();
+                if(loginBtn) loginBtn.textContent = 'Entrar';
+                showMessage('login-message', 'Erro de conexão com o servidor.', false);
+            })
+            .verificarLogin(nome, senha);
+    }
+}
 
-  // Lógica de Logout
-  function logout() {
-    loggedUser = null;
-    currentPainelFilters = { status: "Ativas", setor: "Todos", data: "Todas" }; 
-    stopChatBackgroundService(); 
-    stopPrivateMessageNotifier(); // Para notificador de mensagens privadas
+function logout() {
+    stopAllPollingServices();
+    stopAllAudioLoops();
+
+    const chatWin = document.getElementById('chat-floating-window');
+    if(chatWin) chatWin.style.display = 'none';
     
-    // Esconder Chat Flutuante
-    document.getElementById('chat-floating-window').style.display = 'none';
-    document.getElementById('chat-fab').style.display = 'none';
-    isChatWindowOpen = false;
-
+    const chatFab = document.getElementById('chat-fab');
+    if(chatFab) chatFab.style.display = 'none';
+    
     document.getElementById('login-container').style.display = 'flex';
     document.getElementById('main-panel').style.display = 'none';
     document.getElementById('login-nome').value = '';
     document.getElementById('login-senha').value = '';
     
-    stopAudioLoop();
-    stopRemoteAudioLoop();
-    stopChatAudioLoop(); // Para som do chat se houver
-    if (osCheckInterval) clearInterval(osCheckInterval);
-    if (updateCheckInterval) clearInterval(updateCheckInterval);
-    
-    document.removeEventListener('visibilitychange', handleWakeLockVisibility);
-    releaseWakeLock();
+    loggedUser = null;
+    isChatWindowOpen = false;
     clearSession();
+    releaseWakeLock();
+    document.removeEventListener('visibilitychange', handleWakeLockVisibility);
+    
     loadPopUpOnLoginScreen();
-  }
+}
 
-  // Configura visibilidade das abas
-  function configureAcessLevel(nivel) {
+function configureAcessLevel(nivel) {
     const n = nivel.toLowerCase();
-    const els = {
-        painel: document.getElementById('tab-painel-os'),
-        diario: document.getElementById('tab-diario-tecnico'),
-        consulta: document.getElementById('tab-consulta-rotinas'),
-        relatorios: document.getElementById('tab-relatorios'),
-        config: document.getElementById('tab-configuracoes'),
-        minhaConta: document.getElementById('tab-minha-conta')
+    const rules = {
+        'tab-btn-dashboard': ['admin', 'gerente'],
+        'tab-painel-os': ['admin', 'gerente', 'tecnico', 'recepcao'],
+        'tab-diario-tecnico': ['tecnico', 'admin', 'gerente'],
+        'tab-relatorios': ['admin', 'gerente'],
+        'tab-configuracoes': ['admin'],
+        'tab-minha-conta': ['admin', 'gerente', 'tecnico', 'recepcao'],
+        'tab-programas': ['admin', 'gerente', 'tecnico'],
+        'btn-indicadores-estatisticas': ['admin', 'gerente'],
+        'btn-demonstrativos-despesas': ['admin', 'gerente'],
+        'btn-avaliacao-desempenho': ['admin', 'gerente']
     };
 
-    if (els.painel) els.painel.style.display = ['admin', 'gerente', 'tecnico', 'recepcao'].includes(n) ? 'inline-block' : 'none';
-    if (els.diario) els.diario.style.display = (n === 'tecnico') ? 'inline-block' : 'none';
-    if (els.consulta) els.consulta.style.display = ['admin', 'gerente', 'tecnico'].includes(n) ? 'inline-block' : 'none';
-    if (els.relatorios) els.relatorios.style.display = ['admin', 'gerente'].includes(n) ? 'inline-block' : 'none';
-    if (els.config) els.config.style.display = (n === 'admin') ? 'inline-block' : 'none';
-    if (els.minhaConta) els.minhaConta.style.display = (n !== 'solicitante') ? 'inline-block' : 'none';
-  }
+    for (const id in rules) {
+        const element = document.getElementById(id);
+        if (element) {
+            element.style.display = rules[id].includes(n) ? 'flex' : 'none';
+        }
+    }
+}
 
-  /** * =================================================================
-   * 2. NAVEGAÇÃO E UTILITÁRIOS
-   * =================================================================
-   */
-  
-  // Função para injetar dinamicamente o botão e content de Relatório de Rotinas
-  function setupRelatoriosDynamicUI() {
-      const parent = document.getElementById('relatorios');
-      if (!parent) return;
+/**
+ * -----------------------------------------------------------------
+ * MÓDULO 2: UI, NAVEGAÇÃO E UTILITÁRIOS
+ * -----------------------------------------------------------------
+ */
+function showLoading() {
+    const loader = document.getElementById('loading-indicator');
+    if (loader) loader.style.display = 'block';
+}
 
-      const subTabsContainer = parent.querySelector('.sub-tabs');
-      // Verifica se o botão já existe
-      if (subTabsContainer && !subTabsContainer.querySelector('[data-sub-tab="relatorio-rotinas"]')) {
-          const btn = document.createElement('button');
-          btn.className = 'sub-tab-button';
-          btn.dataset.subTab = 'relatorio-rotinas';
-          btn.textContent = 'Relatório Rotinas';
-          subTabsContainer.appendChild(btn);
-      }
+function hideLoading() {
+    const loader = document.getElementById('loading-indicator');
+    if (loader) loader.style.display = 'none';
+}
 
-      // Verifica se o container de conteúdo já existe
-      if (!parent.querySelector('#relatorio-rotinas-subcontent')) {
-          const contentDiv = document.createElement('div');
-          contentDiv.id = 'relatorio-rotinas-subcontent';
-          contentDiv.className = 'sub-tab-content';
-          // Container para os controles específicos
-          contentDiv.innerHTML = '<div id="rotinas-report-controls"></div><div class="table-container" style="margin-top:20px; overflow-x:auto;" id="rotinas-report-output"></div>';
-          parent.appendChild(contentDiv);
-      }
-  }
-
-  // Lógica da Janela de Chat Flutuante
-  function toggleChatWindow() {
-      const win = document.getElementById('chat-floating-window');
-      
-      // Verifica estado atual visualmente
-      if (win.style.display === 'none') {
-          openChatWindow();
-      } else {
-          win.style.display = 'none';
-          isChatWindowOpen = false;
-      }
-  }
-
-  function openChatWindow() {
-      const win = document.getElementById('chat-floating-window');
-      const badge = document.getElementById('chat-badge');
-      
-      win.style.display = 'flex'; // Abre visualmente
-      isChatWindowOpen = true; // Marca estado
-      
-      badge.style.display = 'none'; // Esconde notificação
-      stopChatAlarm(); // Para som e limpa persistência
-      
-      // Renderiza histórico se houver cache
-      if (cachedChatMessages.length > 0) renderChatDOM(cachedChatMessages, true);
-      
-      // Foca no input
-      setTimeout(() => document.getElementById('chat-input-text').focus(), 100);
-      
-      // Força atualização
-      loadGlobalChatHistory(true, false);
-  }
-
-  // Navegação de Abas Principais
-  function openTab(tabName) {
+function openTab(tabName, noLoad = false) {
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
-    
-    const btn = document.querySelector(`.tab-button[data-tab="${tabName}"]`);
-    const content = document.getElementById(tabName);
-    if (btn) btn.classList.add('active');
-    if (content) content.classList.add('active');
 
-    if (tabName === 'painel-os' && loggedUser) loadPainelOS();
-    
-    // --- ATUALIZAÇÃO: Preencher campos do Diário Técnico automaticamente ---
-    if (tabName === 'diario-tecnico' && loggedUser) {
-        const elData = document.getElementById('diario-data');
-        const elNome = document.getElementById('diario-tecnico-nome');
-        if (elData) elData.value = new Date().toISOString().split('T')[0];
-        if (elNome) { 
-            elNome.value = loggedUser.nome; 
-            elNome.disabled = true; 
-        }
-    }
+    document.getElementById(tabName)?.classList.add('active');
+    document.querySelector(`.tab-button[data-tab="${tabName}"]`)?.classList.add('active');
 
-    if (tabName === 'consulta-rotinas' && loggedUser) { 
-        loadRotinasControls(); 
-        forceInlineFilterLayout('rotinas-filter-tecnico'); 
-        aplicarFiltroConsultaRotinas(); 
-    }
-    
-    // --- ATUALIZAÇÃO: Relatórios (Limpeza de Filtros) ---
-    if (tabName === 'relatorios') {
-        const activeSub = content.querySelector('.sub-tab-button.active');
-        if (!activeSub) {
-             openSubTab('estatisticas', 'relatorios');
-        } else {
-             // Força o recarregamento dos controles para limpar filtros ao entrar na aba
-             const subTab = activeSub.dataset.subTab;
-             if (subTab === 'estatisticas') {
-                 loadStatistics();
-                 forceInlineFilterLayout('stats-filter-data-inicio');
-             } else if (subTab === 'relatorio-os') {
-                 loadRelatorioControls(); // Reseta datas para padrão
-                 aplicarFiltroRelatorio();
-             } else if (subTab === 'relatorio-rotinas') {
-                 loadRelatorioRotinasControls(); // Reseta datas para padrão
-                 aplicarFiltroRelatorioRotinas();
-             }
-        }
-    }
-    
-    if (tabName === 'configuracoes') {
-        const activeSub = content.querySelector('.sub-tab-button.active');
-        if (!activeSub) {
-            openSubTab('acesso-senha', 'configuracoes');
-        } else {
-            if (activeSub.dataset.subTab === 'acesso-senha') loadAdminUsersTable();
-            else if (activeSub.dataset.subTab === 'popup') loadPopUpConfigAdmin();
-            else if (activeSub.dataset.subTab === 'log-acoes') loadActionLogs();
-            else if (activeSub.dataset.subTab === 'enviar-mensagem') loadMessageSender();
-        }
-    }
+    if (noLoad) return;
 
-    if (tabName === 'minha-conta') {
-        document.getElementById('cp-email').value = loggedUser.email;
-        google.script.run.withSuccessHandler(() => {}).markMessagesAsRead(loggedUser.email);
-        loadMyMessages();
-    }
-  }
+    switch (tabName) {
+        case 'dashboard':
+            if (loggedUser && ['admin', 'gerente'].includes(loggedUser.nivel.toLowerCase())) {
+                loadStatistics();
+            }
+            break;
+        case 'gerar-os':
+            setTimeout(checkForOSDraft, 100);
+            break;
+        case 'painel-os':
+            stopAssignmentAlarm();
+            stopRemoteAudioLoop(); 
+            stopOverdueAlarm(); 
+            if (loggedUser) loadPainelOS();
+            break;
+        case 'diario-tecnico':
+            if (loggedUser) {
+                const dataInput = document.getElementById('diario-data');
+                if(dataInput) dataInput.value = getLocalDateString(new Date());
+                const tecnicoContainer = document.getElementById('diario-tecnico-container');
 
-  // Navegação de Sub-abas
-  function openSubTab(subTabName, parentTabId) {
+                if (tecnicoContainer) {
+                    if (['admin', 'gerente'].includes(loggedUser.nivel.toLowerCase())) {
+                        const tecOpts = tecnicosList.map(t => `<option value="${t}">${escapeHtml(t)}</option>`).join('');
+                        tecnicoContainer.innerHTML = `
+                            <label for="diario-tecnico-select">Técnico:</label>
+                            <select id="diario-tecnico-select">
+                                <option value="">-- Selecione --</option>
+                                ${tecOpts}
+                            </select>
+                        `;
+                    } else { 
+                        tecnicoContainer.innerHTML = `
+                            <label for="diario-tecnico">Técnico:</label>
+                            <input type="text" id="diario-tecnico" value="${escapeHtml(loggedUser.nome)}" disabled>
+                        `;
+                    }
+                }
+            }
+            break;
+        case 'relatorios':
+            const activeSubRelatorios = document.querySelector('#relatorios .sub-tab-button.active');
+            openSubTab(activeSubRelatorios?.dataset.subTab || 'relatorio-os', 'relatorios');
+            break;
+        case 'configuracoes':
+            const activeSubConfig = document.querySelector('#configuracoes .sub-tab-button.active');
+            openSubTab(activeSubConfig?.dataset.subTab || 'acesso-senha', 'configuracoes');
+            break;
+        case 'minha-conta':
+            stopPrivateMessageAlarm(); 
+            const cpEmail = document.getElementById('cp-email');
+            if(cpEmail) cpEmail.value = loggedUser.email;
+            showLoading();
+            google.script.run.withSuccessHandler(() => {
+                hideLoading();
+                const bell = document.getElementById('private-message-bell');
+                if(bell) bell.style.display = 'none';
+            }).withFailureHandler(() => hideLoading()).markMessagesAsRead(loggedUser.email);
+            loadMyMessages();
+            break;
+    }
+}
+
+function openSubTab(subTabName, parentTabId) {
     const parent = document.getElementById(parentTabId);
     if (!parent) return;
-    
+
     parent.querySelectorAll('.sub-tab-content').forEach(c => c.classList.remove('active'));
     parent.querySelectorAll('.sub-tab-button').forEach(b => b.classList.remove('active'));
-    
-    const subBtn = parent.querySelector(`.sub-tab-button[data-sub-tab="${subTabName}"]`);
-    const subContent = parent.querySelector(`#${subTabName}-subcontent`);
-    
-    if(subBtn) subBtn.classList.add('active');
-    if(subContent) subContent.classList.add('active');
+
+    parent.querySelector(`.sub-tab-button[data-sub-tab="${subTabName}"]`)?.classList.add('active');
+    parent.querySelector(`#${subTabName}-subcontent`)?.classList.add('active');
 
     if (parentTabId === 'relatorios') {
-        if (subTabName === 'estatisticas') { loadStatistics(); forceInlineFilterLayout('stats-filter-data-inicio'); }
-        if (subTabName === 'relatorio-os') { loadRelatorioControls(); aplicarFiltroRelatorio(); }
-        if (subTabName === 'relatorio-rotinas') { loadRelatorioRotinasControls(); aplicarFiltroRelatorioRotinas(); }
+        switch (subTabName) {
+            case 'relatorio-os': loadRelatorioControls(); aplicarFiltroRelatorio(); break;
+            case 'relatorio-rotinas': loadRelatorioRotinasControls(); aplicarFiltroRelatorioRotinas(); break;
+        }
+    } else if (parentTabId === 'configuracoes') {
+        switch (subTabName) {
+            case 'acesso-senha': loadAdminUsersTable(); break;
+            case 'popup': loadPopUpConfigAdmin(); break;
+            case 'log-acoes': loadActionLogs(); break;
+            case 'enviar-mensagem': loadMessageSender(); break;
+        }
     }
-    if (parentTabId === 'configuracoes') {
-        if (subTabName === 'acesso-senha') loadAdminUsersTable();
-        if (subTabName === 'popup') loadPopUpConfigAdmin();
-        if (subTabName === 'log-acoes') loadActionLogs();
-        if (subTabName === 'enviar-mensagem') loadMessageSender();
-    }
-  }
+}
 
-  // Helper para forçar CSS inline
-  function forceInlineFilterLayout(childInputId) {
-      const inputEl = document.getElementById(childInputId);
-      if (inputEl) {
-          const formGroup = inputEl.closest('.form-group');
-          if (formGroup && formGroup.parentElement) {
-              const container = formGroup.parentElement;
-              container.style.cssText = "display: flex; flex-direction: row; gap: 15px; align-items: flex-end; flex-wrap: wrap;";
-              Array.from(container.children).forEach(child => {
-                  if (child.classList.contains('form-group')) {
-                      child.style.cssText = "flex: 1; min-width: 150px; margin-bottom: 0;";
-                  }
-              });
-          }
-      }
-  }
-
-  // Configura fechamento de modais
-  function setupModalListeners(modalId) {
-      const modal = document.getElementById(modalId);
-      if (!modal) return;
-      const closeButtons = modal.querySelectorAll('.close-button');
-      closeButtons.forEach(btn => btn.onclick = () => {
-          modal.style.display = "none";
-          if (modalId === 'os-modal') modalFilesToUpload = [];
-          
-          // Se fechar o aviso de mensagem manualmente, para o som para não enlouquecer o usuário
-          if (modalId === 'message-notification-modal') stopPrivateMsgAudio();
-      });
-      window.addEventListener('click', (e) => {
-          if (e.target == modal) {
-              modal.style.display = "none";
-              if (modalId === 'os-modal') modalFilesToUpload = [];
-              
-              // Se fechar o aviso de mensagem clicando fora, para o som
-              if (modalId === 'message-notification-modal') stopPrivateMsgAudio();
-          }
-      });
-  }
-
-  function showMessage(elId, msg, isSuccess) {
+function showMessage(elId, msg, isSuccess) {
     const el = document.getElementById(elId);
     if (!el) return;
     el.textContent = msg;
     el.className = isSuccess ? 'message success-message' : 'message error-message';
     el.style.display = 'block';
     setTimeout(() => { el.style.display = 'none'; }, 5000);
-  }
+}
 
-  function getStatusClass(status) {
-    switch (status) {
-      case 'Aberta': return 'status-aberta';
-      case 'Em Andamento': return 'status-andamento';
-      case 'Pendente': return 'status-pendente';
-      case 'Concluída': return 'status-concluida';
-      case 'Cancelada': return 'status-cancelada';
-      default: return 'status-default';
+function showToast(message, actions = [], type = '') {
+    const toast = document.getElementById('os-toast');
+    if(!toast) return;
+    toast.className = 'toast show'; 
+    if(type === 'new-os') toast.classList.add('toast-new-os');
+    if(type === 'high-priority') toast.classList.add('toast-high-priority');
+    if(type === 'assigned') toast.classList.add('toast-assigned');
+    if(type === 'toast-overdue') toast.classList.add('toast-overdue');
+
+    toast.innerHTML = '';
+    const messageDiv = document.createElement('div');
+    messageDiv.innerHTML = message;
+    toast.appendChild(messageDiv);
+
+    if (actions.length > 0) {
+        const actionsContainer = document.createElement('div');
+        actionsContainer.className = 'toast-actions';
+        actions.forEach(action => {
+            const button = document.createElement('button');
+            button.className = 'btn btn-secondary';
+            button.textContent = action.label;
+            button.addEventListener('click', () => {
+                if (typeof action.callback === 'function') action.callback();
+                toast.classList.remove('show');
+            });
+            actionsContainer.appendChild(button);
+        });
+        toast.appendChild(actionsContainer);
     }
-  }
 
-  // --- Upload Handlers (ATUALIZADO PARA ACUMULAÇÃO) ---
-  function handleFileChange(event) { 
-      // Passar array atual (filesToUpload) para acumular
-      processFilesAccumulative(event.target, 'anexo-filename-display', filesToUpload, (f) => filesToUpload = f); 
-  }
-  function handleModalOSFileChange(event) { 
-      // Passar array atual (modalFilesToUpload) para acumular
-      processFilesAccumulative(event.target, 'modal-anexo-filename-display', modalFilesToUpload, (f) => modalFilesToUpload = f); 
-  }
-  function handleDiarioFileChange(event) { 
-      // Passar array atual (modalFilesToUpload) para acumular
-      processFilesAccumulative(event.target, 'diario-anexo-filename-display', modalFilesToUpload, (f) => modalFilesToUpload = f); 
-  }
+    if (actions.length === 0) {
+        setTimeout(() => { toast.classList.remove('show'); }, 5000);
+    }
+}
 
-  // Função genérica de processamento de arquivos com ACUMULAÇÃO
-  function processFilesAccumulative(inputElement, displayId, currentList, callback) {
-      const files = inputElement.files;
-      const display = document.getElementById(displayId);
-      
-      if (!files || files.length === 0) return;
+function getLocalDateString(date) {
+    if (!(date instanceof Date) || isNaN(date)) return '';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
 
-      // Inicializa lista se for nula
-      const currentArray = currentList || [];
-      const currentCount = currentArray.length;
-      const remainingSlots = 6 - currentCount;
+function formatDateToDDMMYYYY(dateString) {
+    if (!dateString || typeof dateString !== 'string') return '';
+    const parts = dateString.split('-');
+    if (parts.length !== 3) return dateString;
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+}
 
-      // Verificação Inicial de Limite
-      if (remainingSlots <= 0) {
-          alert('Limite máximo de 6 imagens já atingido. Gere a OS (ou salve) para limpar os anexos.');
-          inputElement.value = ''; // Limpa o input para não prender o usuário
-          return;
-      }
+function escapeHtml(unsafe) {
+    if (typeof unsafe !== 'string') return '';
+    return unsafe
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
 
-      // Prepara arquivos para processar
-      let filesToProcess = Array.from(files);
-      
-      // Se selecionou mais do que cabe, corta o excesso
-      if (filesToProcess.length > remainingSlots) {
-          alert(`Você selecionou ${filesToProcess.length} arquivos, mas só há espaço para mais ${remainingSlots}. Apenas os primeiros ${remainingSlots} serão adicionados.`);
-          filesToProcess = filesToProcess.slice(0, remainingSlots);
-      }
-
-      let tempFiles = []; 
-      let count = 0;
-      
-      filesToProcess.forEach(file => {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-              tempFiles.push({ base64: reader.result, name: file.name });
-              count++;
-              
-              // Quando todos os arquivos deste lote forem processados
-              if (count === filesToProcess.length) {
-                  // Concatena com a lista existente
-                  const newList = currentArray.concat(tempFiles);
-                  
-                  // Atualiza a variável global via callback
-                  callback(newList);
-                  
-                  // Atualiza o texto na tela
-                  if (display) {
-                      display.textContent = `${newList.length} arquivo(s) carregado(s). (Máx 6)`;
-                      display.style.color = newList.length === 6 ? 'red' : '#555'; // Aviso visual se cheio
-                  }
-                  
-                  // Limpa o input file para permitir selecionar o mesmo arquivo novamente se necessário
-                  // e para permitir selecionar mais arquivos sem "substituir" visualmente no input (que só mostra 1 arquivo)
-                  inputElement.value = ''; 
-              }
-          };
-          reader.readAsDataURL(file);
-      });
-  }
-
-  /** * =================================================================
-   * 3. SISTEMA DE CHAT GLOBAL (SERVIÇO DE FUNDO + JANELA FLUTUANTE)
-   * =================================================================
-   */
-  function startChatBackgroundService() {
-    setupGlobalChatUI();
-    if (chatPollingInterval) clearInterval(chatPollingInterval);
-    
-    lastMessageSignature = ""; 
-    // NOTA: Não limpamos os alarmes aqui para permitir persistência ao recarregar a página
-    
-    loadGlobalChatHistory(true, true); 
-    
-    chatPollingInterval = setInterval(() => { loadGlobalChatHistory(false, false); }, 4000);
-  }
-
-  function stopChatBackgroundService() {
-    if (chatPollingInterval) clearInterval(chatPollingInterval);
-    chatPollingInterval = null;
-    lastMessageSignature = ""; 
-    stopChatAlarm();
-  }
-
-  function setupGlobalChatUI() {
-    // Configurações UI adicionais se necessário
-  }
-
-  // Helper para criar uma assinatura única da mensagem
-  function getMsgSignature(msg) {
-      if (!msg) return "empty";
-      return (msg.timestamp || "") + "_" + (msg.message || "") + "_" + (msg.image || "");
-  }
-
-  function loadGlobalChatHistory(forceScroll, isInitialLoad) {
+/**
+ * -----------------------------------------------------------------
+ * MÓDULO 3: GESTÃO DE O.S. (GERAR E PAINEL)
+ * -----------------------------------------------------------------
+ */
+function renderGerarOSForm() {
     if (!loggedUser) return;
-    
-    const chatWin = document.getElementById('chat-floating-window');
-    const isVisible = (chatWin && chatWin.style.display !== 'none');
-    isChatWindowOpen = isVisible; 
+    const osForm = document.getElementById('os-form');
+    if(!osForm) return;
 
-    google.script.run.withSuccessHandler(messages => {
-        cachedChatMessages = messages; 
-
-        const newestMsg = messages.length > 0 ? messages[messages.length - 1] : null;
-        const currentSignature = getMsgSignature(newestMsg);
-        
-        // Lógica de Novas Mensagens (Polling)
-        if (lastMessageSignature !== "" && currentSignature !== lastMessageSignature && !isInitialLoad) {
-             if (newestMsg && !newestMsg.isMe) {
-                 if (!isChatWindowOpen) {
-                     triggerChatNotification();
-                 } 
-             }
-        }
-        
-        // Lógica de Persistência ao Recarregar a Página (Initial Load)
-        if (isInitialLoad && newestMsg && !newestMsg.isMe) {
-             const wasUnread = STORAGE_API.getItem(CHAT_UNREAD_KEY) === 'true';
-             if (wasUnread && !isChatWindowOpen) {
-                 triggerChatNotification();
-             }
-        }
-
-        lastMessageSignature = currentSignature;
-
-        if (isChatWindowOpen) {
-             renderChatDOM(messages, forceScroll);
-             // Se janela está aberta, marcamos como lida e paramos o som
-             if (STORAGE_API.getItem(CHAT_UNREAD_KEY) === 'true') {
-                 stopChatAlarm();
-             }
-        }
-
-    }).getGlobalChatHistory(loggedUser.email);
-  }
-
-  // Função auxiliar para disparar a notificação
-  function triggerChatNotification() {
-      document.getElementById('chat-badge').style.display = 'block'; 
-      showToast("Nova mensagem no Chat!");
-      startChatAudioLoop(); // Inicia o som
-      STORAGE_API.setItem(CHAT_UNREAD_KEY, 'true'); // Marca como não lida
-  }
-
-  function renderChatDOM(messages, forceScroll) {
-      const container = document.getElementById('chat-history-container');
-      if (!container) return;
-      
-      if (messages.length === 0) {
-          container.innerHTML = '<p style="text-align:center; color:#777; margin-top:20px; font-size:12px;">Chat Interno.<br>Diga olá! 👋</p>';
-          return;
-      }
-      
-      let html = '';
-      messages.forEach(msg => {
-          const typeClass = msg.isMe ? 'msg-sent' : 'msg-received';
-          const senderInfo = !msg.isMe ? `<div class="msg-sender">${msg.fromName}</div>` : '';
-          let contentHtml = '';
-          if (msg.message) contentHtml += msg.message.replace(/\n/g, '<br>');
-          if (msg.image) {
-              const att = String(msg.image || '');
-              const parts = att.split('\n').filter(Boolean);
-              parts.forEach(p => {
-                const lower = p.toLowerCase();
-                if (lower.match(/\.(png|jpe?g|gif|webp|svg)(\?.*)?$/)) {
-                  contentHtml += `<div style="margin-top:6px;"><a href="${p}" target="_blank"><img src="${p}" style="max-width:180px; border-radius:8px; display:block;"></a></div>`;
-                } else {
-                  contentHtml += `<div style="margin-top:6px;"><a href="${p}" target="_blank">${p.split('/').pop()}</a></div>`;
-                }
-              });
-          }
-          html += `<div class="msg-bubble ${typeClass}">${senderInfo}${contentHtml}<span class="msg-time">${(msg.timestamp || '').split(' ')[1] || ''}</span></div>`;
-      });
-      
-      if (container.innerHTML !== html) {
-           const wasAtBottom = (container.scrollTop + container.clientHeight >= container.scrollHeight - 50);
-           container.innerHTML = html;
-           if (forceScroll || wasAtBottom) {
-               container.scrollTop = container.scrollHeight;
-           }
-      }
-  }
-
-  // --- Funções de Controle de Áudio do Chat ---
-
-  function startChatAudioLoop() {
-      // Se já estiver tocando, não faz nada
-      if (chatAudioLoopInterval) return;
-
-      // Toca imediatamente a primeira vez
-      playNotificationSound(0.6, 600);
-      
-      // Inicia o intervalo de 10 segundos
-      chatAudioLoopInterval = setInterval(() => {
-          playNotificationSound(0.6, 600);
-      }, AUDIO_INTERVAL);
-  }
-
-  function stopChatAudioLoop() {
-      if (chatAudioLoopInterval) {
-          clearInterval(chatAudioLoopInterval);
-          chatAudioLoopInterval = null;
-      }
-  }
-
-  function stopChatAlarm() {
-      document.getElementById('chat-badge').style.display = 'none';
-      stopChatAudioLoop(); // Para o som
-      STORAGE_API.removeItem(CHAT_UNREAD_KEY); // Remove a persistência
-  }
-
-  // Handler do input file do chat (múltiplos arquivos)
-  function handleChatAttachFiles(event) {
-    const input = event.target;
-    const files = input.files;
-    if (!files || files.length === 0) return;
-
-    const maxTotalFiles = 6; // limite opcional
-    const remaining = Math.max(0, maxTotalFiles - chatAttachments.length);
-    const toProcess = Array.from(files).slice(0, remaining);
-
-    if (toProcess.length < files.length) {
-      alert(`Apenas ${remaining} arquivos adicionais podem ser anexados (limite ${maxTotalFiles}).`);
-    }
-
-    let processed = 0;
-    toProcess.forEach(file => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const dataUrl = e.target.result;
-        const isImage = file.type.startsWith('image/');
-        chatAttachments.push({ base64: dataUrl, name: file.name, size: file.size, isImage: isImage });
-        processed++;
-        if (processed === toProcess.length) {
-          renderChatAttachmentsPreview();
-        }
-      };
-      reader.readAsDataURL(file);
-    });
-
-    // limpa input para permitir reuso
-    input.value = '';
-  }
-
-  function renderChatAttachmentsPreview() {
-    const container = document.getElementById('chat-attachments-preview');
-    container.innerHTML = '';
-    chatAttachments.forEach((a, idx) => {
-      const item = document.createElement('div');
-      item.className = 'chat-attachment-item';
-      if (a.isImage) {
-        const img = document.createElement('img');
-        img.src = a.base64;
-        img.style.width = '40px';
-        img.style.height = '40px';
-        img.style.objectFit = 'cover';
-        img.style.borderRadius = '6px';
-        item.appendChild(img);
-      }
-      const text = document.createElement('div');
-      text.style.maxWidth = '80px';
-      text.style.overflow = 'hidden';
-      text.style.textOverflow = 'ellipsis';
-      text.style.whiteSpace = 'nowrap';
-      text.textContent = a.name;
-      item.appendChild(text);
-
-      const rm = document.createElement('div');
-      rm.className = 'chat-attachment-remove';
-      rm.title = 'Remover';
-      rm.textContent = '✕';
-      rm.onclick = () => { chatAttachments.splice(idx,1); renderChatAttachmentsPreview(); };
-      item.appendChild(rm);
-
-      container.appendChild(item);
-    });
-  }
-
-  function sendChatMessage() {
-    const input = document.getElementById('chat-input-text');
-    const msg = input.value.trim();
-    if (!msg && chatAttachments.length === 0) return;
-
-    input.value = ''; 
-    const container = document.getElementById('chat-history-container');
-    let tempHtml = '';
-    if (msg) {
-      tempHtml += `<div class="msg-bubble msg-sent" style="opacity:0.7">${msg.replace(/\n/g, '<br>')} <span class="msg-time">...</span></div>`;
-    }
-    chatAttachments.forEach(a => {
-      if (a.isImage) {
-        tempHtml += `<div class="msg-bubble msg-sent" style="opacity:0.9"><img src="${a.base64}" style="max-width:140px; border-radius:8px; margin:5px 0;"><div style="font-size:11px;color:#666;margin-top:4px;">${a.name}</div></div>`;
-      } else {
-        tempHtml += `<div class="msg-bubble msg-sent" style="opacity:0.9"><div style="font-weight:bold;">${a.name}</div><div style="font-size:12px;color:#666;">${(a.size/1024).toFixed(1)} KB</div></div>`;
-      }
-    });
-    container.insertAdjacentHTML('beforeend', tempHtml);
-    container.scrollTop = container.scrollHeight;
-
-    const filesToSend = chatAttachments.map(a => ({ base64: a.base64, name: a.name }));
-
-    google.script.run.withSuccessHandler(res => {
-        if (res.status === 'sucesso') { loadGlobalChatHistory(true, false); } 
-        else { alert('Erro ao enviar: ' + res.message); }
-    }).sendChatMessageAdvanced(loggedUser.email, 'GLOBAL', msg, filesToSend);
-
-    // limpa anexos e preview
-    chatAttachments = [];
-    renderChatAttachmentsPreview();
-  }
-
-  /** * =================================================================
-   * 4. GERAÇÃO DE O.S. e DROPWDOMS
-   * =================================================================
-   */
-  function loadDropdownData() {
-    let sLoaded = false, tLoaded = false;
-    const render = () => { if (sLoaded && tLoaded) { renderGerarOSForm(); loadPainelOS(); } };
-    google.script.run.withSuccessHandler(d => { setoresList=d||[]; sLoaded=true; render(); }).getSetores();
-    google.script.run.withSuccessHandler(d => { tecnicosList=d||[]; tLoaded=true; render(); }).getTecnicos();
-  }
-
-  function renderGerarOSForm() {
-    if (!loggedUser) return;
     let tecnicoHtml = '';
-    if (['admin','gerente','tecnico'].includes(loggedUser.nivel.toLowerCase())) {
+    if (['admin', 'gerente', 'tecnico'].includes(loggedUser.nivel.toLowerCase())) {
         const opts = tecnicosList.map(t => `<option value="${t}">${t}</option>`).join('');
         tecnicoHtml = `<div class="form-group"><label>Técnico:</label><select id="os-tecnico"><option value="">-- Atribuir (Opcional) --</option>${opts}</select></div>`;
     }
-    const html = `
+    
+    const setorOptions = setoresList.map(s => `<option value="${s}">${s}</option>`).join('');
+    osForm.innerHTML = `
       <div class="form-group"><label>Solicitante:</label><input type="text" value="${loggedUser.nome}" disabled></div>
-      <div class="form-group"><label>Setor:</label><select id="os-setor"><option value="">-- Selecione --</option>${setoresList.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
+      <div class="form-group"><label>Setor:</label><select id="os-setor"><option value="">-- Selecione --</option>${setorOptions}</select></div>
       <div class="form-group"><label>Descrição:</label><textarea id="os-descricao" rows="5" required></textarea></div>
       <div class="form-group"><label>Prioridade:</label><select id="os-prioridade"><option value="Baixa">Baixa</option><option value="Média" selected>Média</option><option value="Alta">Alta</option></select></div>
       ${tecnicoHtml}
     `;
-    document.getElementById('os-form').innerHTML = html;
-  }
+    
+    let saveDraftTimeout;
+    osForm.addEventListener('input', (event) => {
+        if (event.target.matches('#os-descricao, #os-setor, #os-prioridade, #os-tecnico')) {
+            clearTimeout(saveDraftTimeout);
+            saveDraftTimeout = setTimeout(saveOSDraft, 1000);
+        }
+    });
+}
 
-  function submitGerarOS() {
-    const setor = document.getElementById('os-setor').value;
-    const desc = document.getElementById('os-descricao').value;
+function saveOSDraft() {
+    const descEl = document.getElementById('os-descricao');
+    if (!descEl || !descEl.value.trim()) { clearOSDraft(); return; }
+    try {
+        STORAGE_API.setItem(DRAFT_OS_KEY, JSON.stringify({
+            setor: document.getElementById('os-setor')?.value,
+            descricao: descEl.value,
+            prioridade: document.getElementById('os-prioridade')?.value,
+            tecnico: document.getElementById('os-tecnico')?.value || ''
+        }));
+    } catch (e) {}
+}
+
+function clearOSDraft() {
+    try { STORAGE_API.removeItem(DRAFT_OS_KEY); } catch (e) {}
+}
+
+function checkForOSDraft() {
+    try {
+        const savedDraft = STORAGE_API.getItem(DRAFT_OS_KEY);
+        if (savedDraft) {
+            const draftData = JSON.parse(savedDraft);
+            showToast("📝 <strong>Rascunho de O.S. encontrado!</strong>", [
+                { label: 'Restaurar', callback: () => {
+                    const elS = document.getElementById('os-setor'); if(elS) elS.value = draftData.setor || '';
+                    const elD = document.getElementById('os-descricao'); if(elD) elD.value = draftData.descricao || '';
+                    const elP = document.getElementById('os-prioridade'); if(elP) elP.value = draftData.prioridade || 'Média';
+                    const tecEl = document.getElementById('os-tecnico'); if (tecEl) tecEl.value = draftData.tecnico || '';
+                }},
+                { label: 'Descartar', callback: () => { clearOSDraft(); showToast("Rascunho descartado."); } }
+            ]);
+        }
+    } catch (e) { clearOSDraft(); }
+}
+
+function submitGerarOS() {
+    const setor = document.getElementById('os-setor')?.value;
+    const desc = document.getElementById('os-descricao')?.value;
     if (!setor || !desc) { showMessage('os-gerar-message', 'Preencha Setor e Descrição.', false); return; }
-    const data = {
-      solicitanteEmail: loggedUser.email, solicitanteNome: loggedUser.nome,
-      setor: setor, descricao: desc, prioridade: document.getElementById('os-prioridade').value,
-      tecnico: document.getElementById('os-tecnico') ? document.getElementById('os-tecnico').value : '',
-      filesData: filesToUpload
-    };
-    showMessage('os-gerar-message', 'Gerando...', true);
-    google.script.run.withSuccessHandler(res => {
-        if(res.status === 'sucesso') {
-            showMessage('os-gerar-message', res.mensagem, true);
-            document.getElementById('os-descricao').value = ''; document.getElementById('os-setor').value = ''; 
-            
-            // LIMPA UPLOAD E DISPLAY
-            filesToUpload = []; 
-            document.getElementById('os-anexo-multiple').value = ''; 
-            document.getElementById('anexo-filename-display').textContent = '';
-            
-            if (document.querySelector('.tab-button[data-tab="painel-os"].active')) aplicarFiltroPainel();
-        } else { showMessage('os-gerar-message', res.mensagem, false); }
-    }).gerarOS(data);
-  }
 
-  /** * =================================================================
-   * 5. PAINEL DE O.S.
-   * =================================================================
-   */
-  function loadPainelOS() {
-    if (!loggedUser) return;
+    const prioridade = document.getElementById('os-prioridade')?.value || 'Média';
+    const tecnicoEl = document.getElementById('os-tecnico');
+    const tecnico = tecnicoEl?.value ? tecnicoEl.options[tecnicoEl.selectedIndex].text : 'Não atribuído';
+
+    const confDetails = document.getElementById('confirm-os-details');
+    if(confDetails) {
+        confDetails.innerHTML = `
+          <p><strong>Setor:</strong> ${escapeHtml(setor)}</p>
+          <p><strong>Prioridade:</strong> ${escapeHtml(prioridade)}</p>
+          <p><strong>Técnico:</strong> ${escapeHtml(tecnico)}</p>
+          <p><strong>Descrição:</strong> ${escapeHtml(desc.substring(0, 100))}...</p>
+          <p><strong>Anexos:</strong> ${filesToUpload.length} arquivo(s)</p>
+        `;
+    }
+    document.getElementById('confirm-os-modal').style.display = 'block';
+}
+
+function executeSubmitOS() {
+    document.getElementById('confirm-os-modal').style.display = 'none';
+
+    const data = {
+        solicitanteEmail: loggedUser.email,
+        solicitanteNome: loggedUser.nome,
+        setor: document.getElementById('os-setor').value,
+        descricao: document.getElementById('os-descricao').value,
+        prioridade: document.getElementById('os-prioridade').value,
+        tecnico: document.getElementById('os-tecnico')?.value || '',
+        filesData: filesToUpload
+    };
+
+    showMessage('os-gerar-message', 'Gerando...', true);
+    showLoading();
+    google.script.run.withSuccessHandler(res => {
+        hideLoading();
+        if (res.status === 'sucesso') {
+            showMessage('os-gerar-message', res.mensagem, true);
+            document.getElementById('os-descricao').value = '';
+            document.getElementById('os-setor').value = '';
+            document.getElementById('os-prioridade').value = 'Média';
+            const tecEl = document.getElementById('os-tecnico'); if (tecEl) tecEl.value = '';
+            filesToUpload = [];
+            const anexoMultiple = document.getElementById('os-anexo-multiple'); if(anexoMultiple) anexoMultiple.value = '';
+            const filenameDisp = document.getElementById('anexo-filename-display'); if(filenameDisp) filenameDisp.textContent = '';
+            clearOSDraft();
+            if (document.querySelector('.tab-button[data-tab="painel-os"]?.active')) aplicarFiltroPainel();
+        } else {
+            showMessage('os-gerar-message', res.mensagem, false);
+        }
+    }).withFailureHandler(() => hideLoading()).gerarOS(data);
+}
+
+function loadPainelOSFilters() {
     const container = document.getElementById('painel-filtros-container');
     if (!container) return;
     
-    // --- CORREÇÃO: Respeitar os filtros atuais ao redesenhar ---
     const isSel = (val, cur) => val === cur ? 'selected' : '';
 
     const setorOpts = setoresList.map(s => `<option value="${s}" ${isSel(s, currentPainelFilters.setor)}>${s}</option>`).join('');
     const tecOpts = tecnicosList.map(t => `<option value="${t}" ${isSel(t, currentPainelFilters.tecnico)}>${t}</option>`).join('');
-    
-    // Dropdown de Status
-    const stOpts = ["Ativas", "Todos", "Aberta", "Em Andamento", "Pendente", "Concluída"]
-        .map(s => `<option value="${s}" ${isSel(s, currentPainelFilters.status)}>${s}</option>`).join('');
-        
-    // Dropdown de Data
+    const stOpts = ["Ativas", "Todos", "Aberta", "Em Andamento", "Pendente", "Concluída"].map(s => `<option value="${s}" ${isSel(s, currentPainelFilters.status)}>${s}</option>`).join('');
     const dtOpts = ["Hoje", "Todas"].map(d => `<option value="${d}" ${isSel(d, currentPainelFilters.data)}>${d}</option>`).join('');
 
     container.innerHTML = `
-      <div class="filter-controls-flex" style="display: flex; flex-direction: row; gap: 15px; align-items: flex-end; flex-wrap: wrap;">
-        <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;"><label>Data:</label>
-            <select id="pf-data" onchange="aplicarFiltroPainel()" style="width: 100%;">${dtOpts}</select>
+      <div class="filter-controls-flex">
+        <div class="form-group" style="flex-grow: 2; min-width: 200px;">
+          <label for="pf-keyword">Busca Rápida:</label>
+          <input type="text" id="pf-keyword" placeholder="Buscar na descrição..." oninput="debounceAplicarFiltro()">
         </div>
-        <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;"><label>Status:</label>
-            <select id="pf-status" onchange="aplicarFiltroPainel()" style="width: 100%;">${stOpts}</select>
-        </div>
-        <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;"><label>Setor:</label>
-            <select id="pf-setor" onchange="aplicarFiltroPainel()" style="width: 100%;"><option value="Todos" ${isSel('Todos', currentPainelFilters.setor)}>Todos</option>${setorOpts}</select>
-        </div>
-        <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;"><label>Técnico:</label>
-            <select id="pf-tecnico" onchange="aplicarFiltroPainel()" style="width: 100%;"><option value="Todos" ${isSel('Todos', currentPainelFilters.tecnico)}>Todos</option><option value="Nenhum" ${isSel('Nenhum', currentPainelFilters.tecnico)}>Não Atribuído</option>${tecOpts}</select>
-        </div>
+        <div class="form-group"><label>Data:</label><select id="pf-data" onchange="aplicarFiltroPainel(1)">${dtOpts}</select></div>
+        <div class="form-group"><label>Status:</label><select id="pf-status" onchange="aplicarFiltroPainel(1)">${stOpts}</select></div>
+        <div class="form-group"><label>Setor:</label><select id="pf-setor" onchange="aplicarFiltroPainel(1)"><option value="Todos" ${isSel('Todos', currentPainelFilters.setor)}>Todos</option>${setorOpts}</select></div>
+        <div class="form-group"><label>Técnico:</label><select id="pf-tecnico" onchange="aplicarFiltroPainel(1)"><option value="Todos" ${isSel('Todos', currentPainelFilters.tecnico)}>Todos</option><option value="Nenhum" ${isSel('Nenhum', currentPainelFilters.tecnico)}>Não Atribuído</option>${tecOpts}</select></div>
       </div>`;
-      
-    aplicarFiltroPainel();
-  }
+    document.getElementById('pf-keyword').value = currentPainelFilters.keyword || '';
+}
 
-  function aplicarFiltroPainel() {
-    const fStatus = document.getElementById('pf-status') ? document.getElementById('pf-status').value : 'Ativas';
-    const fSetor = document.getElementById('pf-setor') ? document.getElementById('pf-setor').value : 'Todos';
-    const fData = document.getElementById('pf-data') ? document.getElementById('pf-data').value : 'Todas';
-    const fTecnico = document.getElementById('pf-tecnico') ? document.getElementById('pf-tecnico').value : 'Todos';
-    
-    currentPainelFilters = { status: fStatus, setor: fSetor, data: fData, tecnico: fTecnico };
+function loadPainelOS() {
+    if (!loggedUser) return;
+    loadPainelOSFilters();
+    aplicarFiltroPainel(1);
+}
+
+let debounceTimer;
+function debounceAplicarFiltro() {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => aplicarFiltroPainel(1), 400); 
+}
+
+function aplicarFiltroPainel(page = 1) {
+    osPaginationState.currentPage = page;
+    currentPainelFilters = {
+        status: document.getElementById('pf-status')?.value || 'Ativas',
+        setor: document.getElementById('pf-setor')?.value || 'Todos',
+        data: document.getElementById('pf-data')?.value || 'Todas',
+        tecnico: document.getElementById('pf-tecnico')?.value || 'Todos',
+        keyword: document.getElementById('pf-keyword')?.value || ''
+    };
     
     const tbody = document.querySelector('#os-table tbody');
-    tbody.innerHTML = '<tr><td colspan="9">Carregando...</td></tr>';
+    if(tbody) tbody.innerHTML = '<tr><td colspan="9">Carregando...</td></tr>';
     
-    // Adicionamos 'setor' ao objeto enviado ao servidor, caso o backend suporte
-    google.script.run.withSuccessHandler(list => {
-        if (!list) { tbody.innerHTML = '<tr><td colspan="9">Nada encontrado.</td></tr>'; return; }
-        
-        let filtered = list;
-        
-        // --- FILTRAGEM CLIENT-SIDE REDUNDANTE PARA GARANTIR PRECISÃO ---
-        
-        // 1. Filtro de Setor (Coluna Index 4) - CORREÇÃO: Com Trim e Lowercase se necessário
-        if (fSetor !== 'Todos') { 
-            filtered = filtered.filter(os => String(os[4]||'').trim() === fSetor.trim()); 
-        }
-        
-        // 2. Filtro de Técnico (Coluna Index 7)
-        if (fTecnico !== 'Todos') {
-            if (fTecnico === 'Nenhum') {
-                // Filtra OS onde o técnico é vazio, nulo ou apenas espaços
-                filtered = filtered.filter(os => !os[7] || String(os[7]).trim() === '');
-            } else {
-                // Filtra OS onde o técnico corresponde exatamente
-                filtered = filtered.filter(os => String(os[7]||'').trim() === fTecnico);
-            }
-        }
-        
-        renderOSDataTable(filtered);
-    }).filtrarOSPainel({ status: fStatus, data: fData, tecnico: fTecnico, setor: fSetor });
-  }
+    showLoading();
+    google.script.run
+        .withSuccessHandler(renderOSDataTable)
+        .withFailureHandler(() => hideLoading())
+        .filtrarOSPainel(currentPainelFilters, osPaginationState.currentPage, osPaginationState.pageSize);
+}
 
-  function renderOSDataTable(list) {
-    const tbody = document.querySelector('#os-table tbody'); tbody.innerHTML = '';
-    if (!list || list.length === 0) { tbody.innerHTML = '<tr><td colspan="9">Nenhuma OS encontrada.</td></tr>'; return; }
-    list.forEach(os => {
-       const row = tbody.insertRow();
-       if (os[9] === 'Alta') row.classList.add('priority-alta');
-       const stClass = getStatusClass(os[6]);
-       row.insertCell(0).innerHTML = `<span class="status-span ${stClass}">${os[6]}</span>`;
-       const idCell = row.insertCell(1); idCell.textContent = os[0]; if (os[6] === 'Aberta') idCell.classList.add('id-aberta');
-       row.insertCell(2).textContent = os[1]; row.insertCell(3).textContent = os[3]; row.insertCell(4).textContent = os[4];
-       row.insertCell(5).innerHTML = (os[5] || '').substring(0,50) + (os[11] ? ' &#128206;' : '');
-       row.insertCell(6).textContent = os[7] || '-'; row.insertCell(7).textContent = os[9];
-       const btn = document.createElement('button'); btn.textContent = 'Ver/Editar'; btn.className = 'btn btn-secondary'; btn.onclick = () => openOSModal(os);
-       row.insertCell(8).appendChild(btn);
-       row.cells[4].classList.add('hide-mobile'); row.cells[6].classList.add('hide-mobile'); row.cells[7].classList.add('hide-mobile');
-    });
-  }
+function getStatusClass(status) {
+    if (!status) return '';
+    return `status-${status.toLowerCase().replace(' ', '-')}`;
+}
 
-  function openOSModal(os) {
-    currentOSId = os[0]; const modal = document.getElementById('os-modal');
-    const anexos = (os[11]||'').split('\n').filter(u=>u).map((u,i) => `<a href="${u}" target="_blank">Anexo ${i+1}</a>`).join(' | ');
+function renderOSDataTable(data) {
+    hideLoading();
+    const list = data.items || [];
+    osPaginationState.totalItems = data.totalItems || 0;
+
+    const tbody = document.querySelector('#os-table tbody'); 
+    if(!tbody) return;
+    tbody.innerHTML = '';
     
-    // --- ATUALIZAÇÃO: Forçar scroll para o CONTEÚDO INTEIRO do modal ---
-    const detailsContainer = document.getElementById('modal-details');
-    if (detailsContainer && detailsContainer.parentElement) {
-        detailsContainer.parentElement.style.maxHeight = '85vh'; 
-        detailsContainer.parentElement.style.overflowY = 'auto'; 
-        detailsContainer.parentElement.style.display = 'block'; 
+    if (list.length === 0) { 
+        tbody.innerHTML = '<tr><td colspan="9">Nenhuma OS encontrada.</td></tr>'; 
+        renderPaginationControls();
+        return; 
     }
     
-    // --- ATUALIZAÇÃO: Descrição com Scroll e Formatação ---
-    const details = `
-        <p><b>ID:</b> ${os[0]} | <b>Data:</b> ${os[1]}</p>
-        <p><b>Solicitante:</b> ${os[3]} | <b>Setor:</b> ${os[4]}</p>
-        <p><b>Descrição:</b></p>
-        <div style="max-height: 200px; overflow-y: auto; background-color: #f8f9fa; padding: 8px; border: 1px solid #dee2e6; border-radius: 4px; margin-bottom: 10px;">
-            ${os[5].replace(/\n/g, '<br>')}
+    const isMobile = window.innerWidth <= 768;
+
+    list.forEach(os => {
+       const row = tbody.insertRow();
+       row.className = 'data-row';
+       if (os[9] === 'Alta') row.classList.add('priority-alta');
+       if (alarmingOverdueOSIds.includes(os[0])) row.classList.add('overdue-os');
+       
+       const viewedIcon = os[12] ? ` <span class="viewed-icon" title="Visualizado por: ${escapeHtml(os[12])}">👁️</span>` : '';
+
+       row.insertCell(0).innerHTML = `<span class="status-span ${getStatusClass(os[6])}">${os[6]}</span>`;
+       const idCell = row.insertCell(1); 
+       idCell.innerHTML = os[0] + viewedIcon; 
+       if (os[6] === 'Aberta') idCell.classList.add('id-aberta');
+       row.insertCell(2).textContent = os[9];
+       row.insertCell(3).textContent = os[1]; 
+       row.insertCell(4).className = 'hide-mobile'; row.insertCell(4).textContent = os[3];
+       row.insertCell(5).className = 'hide-mobile'; row.insertCell(5).textContent = os[4];
+       row.insertCell(6).innerHTML = (os[5] || '').substring(0,50) + (os[11] ? ' &#128206;' : '');
+       row.insertCell(7).className = 'hide-mobile'; row.insertCell(7).textContent = os[7] || '-';
+       
+       const actionCell = row.insertCell(8);
+       const btn = document.createElement('button'); 
+       btn.textContent = isMobile ? 'Ver' : 'Ver/Editar';
+       btn.className = 'btn btn-secondary'; 
+       btn.onclick = (e) => { e.stopPropagation(); openOSModal(os); };
+       
+       if (isMobile) { row.onclick = () => toggleDetailsRow(row, os); } 
+       else { actionCell.appendChild(btn); }
+    });
+
+    renderPaginationControls();
+}
+
+function renderPaginationControls() {
+    const container = document.getElementById('pagination-container');
+    if (!container) return;
+    const { currentPage, pageSize, totalItems } = osPaginationState;
+    const totalPages = Math.ceil(totalItems / pageSize);
+
+    if (totalItems <= 0) {
+        container.innerHTML = '<span class="pagination-info">Nenhum item encontrado.</span>';
+        return;
+    }
+
+    let html = `
+        <div class="pagination-info">
+            Exibindo <strong>${Math.min((currentPage - 1) * pageSize + 1, totalItems)}</strong> - <strong>${Math.min(currentPage * pageSize, totalItems)}</strong> de <strong>${totalItems}</strong> itens
         </div>
-        <p><b>Anexos:</b> ${anexos || 'Nenhum'}</p>
-        <hr>
-        <p><b>Histórico:</b></p>
-        <div style="background:#f9f9f9; padding:5px; max-height:150px; overflow-y:auto; font-size:12px; border: 1px solid #eee;">
-            ${(os[8]||'').replace(/\n/g,'<br>')}
-        </div>`;
-    
-    document.getElementById('modal-details').innerHTML = details;
-    
-    const canEdit = ['admin','gerente','tecnico'].includes(loggedUser.nivel.toLowerCase());
-    if (canEdit) {
-        const tecOpts = tecnicosList.map(t => `<option value="${t}" ${os[7]===t?'selected':''}>${t}</option>`).join('');
-        document.getElementById('modal-edit-form').innerHTML = `
-           <div class="form-group"><label>Status:</label><select id="m-status"><option value="Aberta" ${os[6]==='Aberta'?'selected':''}>Aberta</option><option value="Em Andamento" ${os[6]==='Em Andamento'?'selected':''}>Em Andamento</option><option value="Pendente" ${os[6]==='Pendente'?'selected':''}>Pendente</option><option value="Concluída" ${os[6]==='Concluída'?'selected':''}>Concluída</option><option value="Cancelada" ${os[6]==='Cancelada'?'selected':''}>Cancelada</option></select></div>
-           <div class="form-group"><label>Técnico:</label><select id="m-tecnico"><option value="">-</option>${tecOpts}</select></div>
-           <div class="form-group"><label>Prioridade:</label><select id="m-prio"><option value="Baixa" ${os[9]==='Baixa'?'selected':''}>Baixa</option><option value="Média" ${os[9]==='Média'?'selected':''}>Média</option><option value="Alta" ${os[9]==='Alta'?'selected':''}>Alta</option></select></div>
-           <div class="form-group"><label>Obs:</label><textarea id="m-obs"></textarea></div>
-           <div class="form-group"><input type="file" multiple onchange="handleModalOSFileChange(event)"><small id="modal-anexo-filename-display"></small></div>
-           <button class="btn btn-primary" onclick="saveOSEdit()">Salvar</button>`;
-    } else { document.getElementById('modal-edit-form').innerHTML = ''; }
-    modal.style.display = 'block';
-  }
-
-  function saveOSEdit() {
-      const st = document.getElementById('m-status').value; const tec = document.getElementById('m-tecnico').value; const prio = document.getElementById('m-prio').value; const obs = document.getElementById('m-obs').value;
-      showMessage('modal-message', 'Salvando...', true);
-      google.script.run.withSuccessHandler(r => {
-          if (r.status === 'sucesso') { showMessage('modal-message', r.message, true); setTimeout(() => { document.getElementById('os-modal').style.display='none'; loadPainelOS(); }, 1000); } else { showMessage('modal-message', r.message, false); }
-      }).atualizarOS(currentOSId, st, obs, tec, prio, loggedUser.email, modalFilesToUpload);
-  }
-
-  /** * =================================================================
-   * 6. DIÁRIO E ROTINAS
-   * =================================================================
-   */
-  function submitDiarioTecnico() {
-      const desc = document.getElementById('diario-descricao').value;
-      if (!desc) { showMessage('diario-message', 'Preencha a descrição.', false); return; }
-      
-      // Captura data e hora atual
-      const now = new Date();
-      const formattedDate = String(now.getDate()).padStart(2,'0') + '/' + 
-                            String(now.getMonth()+1).padStart(2,'0') + '/' + 
-                            now.getFullYear() + ' ' + 
-                            String(now.getHours()).padStart(2,'0') + ':' + 
-                            String(now.getMinutes()).padStart(2,'0') + ':' + 
-                            String(now.getSeconds()).padStart(2,'0');
-
-      const data = { 
-          data: formattedDate,
-          tecnicoEmail: loggedUser.email, 
-          tecnicoNome: loggedUser.nome, 
-          descricao: desc, 
-          filesData: modalFilesToUpload 
-      };
-
-      showMessage('diario-message', 'Salvando...', true);
-      google.script.run.withSuccessHandler(r => {
-          if (r.status === 'sucesso') { 
-              showMessage('diario-message', r.message, true); 
-              document.getElementById('diario-descricao').value = ''; 
-              modalFilesToUpload = []; 
-              document.getElementById('diario-anexo-filename-display').textContent = ''; 
-          } else { 
-              showMessage('diario-message', r.message, false); 
-          }
-      }).salvarDiarioTecnico(data);
-  }
-
-  function loadRotinasControls() {
-      const sel = document.getElementById('rotinas-filter-tecnico');
-      sel.innerHTML = '<option value="Todos">Todos</option>' + tecnicosList.map(t => `<option value="${t}">${t}</option>`).join('');
-  }
-
-  function aplicarFiltroConsultaRotinas() {
-      const f = { 
-        tecnico: document.getElementById('rotinas-filter-tecnico').value, 
-        dataInicio: document.getElementById('rotinas-filter-data-inicio').value, 
-        dataFim: document.getElementById('rotinas-filter-data-fim').value 
-      };
-
-      const tbl = document.getElementById('rotinas-table'); tbl.innerHTML = 'Carregando...';
-      google.script.run.withSuccessHandler(list => {
-          let html = '<thead><tr><th>Data/Hora</th><th>Técnico</th><th>Desc</th><th>Ação</th></tr></thead><tbody>';
-          if (!list || list.length === 0) html += '<tr><td colspan="4">Nada encontrado.</td></tr>';
-          else { 
-              const isAdmin = loggedUser.nivel.toLowerCase() === 'admin'; 
-              list.forEach(r => { 
-                  html += `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${isAdmin ? `<button class="btn btn-primary" onclick='editRotina(${JSON.stringify(r)})'>Gerir</button>` : '-'}</td></tr>`; 
-              }); 
-          }
-          tbl.innerHTML = html + '</tbody>';
-      }).filtrarRotinas(f);
-  }
-  
-  function editRotina(r) { currentRotinaRowIndex = r[4]; document.getElementById('rotina-data').value = r[0]; document.getElementById('rotina-tecnico').value = r[1]; document.getElementById('rotina-descricao').value = r[2]; document.getElementById('rotina-modal').style.display = 'block'; }
-  function salvarAtualizacaoRotina() { const desc = document.getElementById('rotina-descricao').value; google.script.run.withSuccessHandler(r => { if (r.status==='sucesso') { document.getElementById('rotina-modal').style.display='none'; aplicarFiltroConsultaRotinas(); } else alert(r.message); }).atualizarRotina(loggedUser.email, currentRotinaRowIndex, desc); }
-  function excluirRotina() { if(confirm('Tem certeza?')) { google.script.run.withSuccessHandler(r => { document.getElementById('rotina-modal').style.display='none'; aplicarFiltroConsultaRotinas(); }).excluirRotina(loggedUser.email, currentRotinaRowIndex); } }
-
-  /** * =================================================================
-   * 7. RELATÓRIOS E ESTATÍSTICAS
-   * =================================================================
-   */
-  function loadStatistics() {
-      const d1 = document.getElementById('stats-filter-data-inicio').value;
-      const d2 = document.getElementById('stats-filter-data-fim').value;
-
-      const container = document.getElementById('stats-dashboard-container'); container.innerHTML = 'Carregando...';
-      google.charts.load('current', {'packages':['corechart']});
-      google.script.run.withSuccessHandler(stats => {
-          container.innerHTML = `<div class="stat-card"><div class="stat-number">${stats.total}</div><div class="stat-label">Total</div></div><div class="stat-card"><div class="stat-number" style="color:red">${stats.abertas}</div><div class="stat-label">Abertas</div></div><div class="stat-card"><div class="stat-number" style="color:blue">${stats.andamento}</div><div class="stat-label">Andamento</div></div><div class="stat-card"><div class="stat-number" style="color:green">${stats.concluidas}</div><div class="stat-label">Concluídas</div></div>`;
-          
-          google.charts.setOnLoadCallback(() => {
-              // 1. Gráfico de Status OS
-              if (stats.chartData && stats.chartData.length > 1) {
-                  const dataStatus = google.visualization.arrayToDataTable(stats.chartData);
-                  new google.visualization.ColumnChart(document.getElementById('status-column-chart')).draw(dataStatus, {title:'Distribuição de OS por Status', legend:'none'});
-              }
-              
-              // 2. Gráfico de Desempenho Técnico (OS vs Diário)
-              if (stats.techPerformanceData && stats.techPerformanceData.length > 1) {
-                  const dataTech = google.visualization.arrayToDataTable(stats.techPerformanceData);
-                  new google.visualization.ColumnChart(document.getElementById('tech-performance-chart')).draw(dataTech, {
-                      title: 'Desempenho por Técnico (Atendimento OS x Registros Diário)',
-                      legend: { position: 'top' },
-                      bar: { groupWidth: '75%' },
-                      vAxis: { title: 'Quantidade', minValue: 0 },
-                      colors: ['#3f51b5', '#4caf50']
-                  });
-              } else {
-                  document.getElementById('tech-performance-chart').innerHTML = '<p style="text-align:center; padding-top:100px; color:#888;">Nenhum dado de desempenho técnico disponível no período.</p>';
-              }
-          });
-          
-      }).getDashboardStatistics(loggedUser.email, d1, d2);
-  }
-
-  function loadRelatorioControls() {
-      const div = document.getElementById('filter-controls');
-      const outputContainer = document.getElementById('report-output');
-      if (outputContainer) outputContainer.innerHTML = '<table id="relatorios-table-os" class="styled-table"></table>';
-      
-      const today = new Date();
-      const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-      const toDateInput = (d) => d.toISOString().split('T')[0]; 
-      
-      const defaultStart = toDateInput(firstDay);
-      const defaultEnd = toDateInput(today);
-      
-      div.innerHTML = `
-        <div class="filter-controls-flex" style="display: flex; flex-direction: row; gap: 15px; align-items: flex-end; flex-wrap: wrap;">
-           <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
-             <label>Status:</label>
-             <select id="fr-status">
-                <option value="Todos">Todas</option>
-                <option value="Ativas">Ativas</option>
-                <option value="Aberta">Abertas</option>
-                <option value="Em Andamento">Em Andamento</option>
-                <option value="Pendente">Pendentes</option>
-                <option value="Concluída">Concluídas</option>
-             </select>
-           </div>
-           
-           <!-- ALTERAÇÃO: FILTRO DE SETOR EM VEZ DE TÉCNICO -->
-           <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
-             <label>Setor:</label>
-             <select id="fr-setor">
-               <option value="Todos">Todos</option>
-               ${setoresList.map(s => `<option value="${s}">${s}</option>`).join('')}
-             </select>
-           </div>
-
-           <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
-             <label>Início:</label>
-             <input type="date" id="fr-d1" value="${defaultStart}">
-           </div>
-           <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
-             <label>Fim:</label>
-             <input type="date" id="fr-d2" value="${defaultEnd}">
-           </div>
-           <button class="btn btn-primary" style="height: 42px; margin-bottom: 0;" onclick="aplicarFiltroRelatorio()">Filtrar</button>
-        </div>`;
-  }
-  
-  // --- NOVA FUNÇÃO: Controles para Relatório de Rotinas ---
-  function loadRelatorioRotinasControls() {
-      const div = document.getElementById('rotinas-report-controls');
-      if (!div) return;
-
-      const outputContainer = document.getElementById('rotinas-report-output');
-      if (outputContainer) outputContainer.innerHTML = '<table id="relatorios-table-rotinas" class="styled-table"></table>';
-      
-      const today = new Date();
-      const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-      const toDateInput = (d) => d.toISOString().split('T')[0]; 
-      
-      const defaultStart = toDateInput(firstDay);
-      const defaultEnd = toDateInput(today);
-      
-      div.innerHTML = `
-        <div class="filter-controls-flex" style="display: flex; flex-direction: row; gap: 15px; align-items: flex-end; flex-wrap: wrap;">
-           <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
-             <label>Técnico:</label>
-             <select id="fr-rotina-tec"><option value="Todos">Todos</option>${tecnicosList.map(t=>`<option value="${t}">${t}</option>`).join('')}</select>
-           </div>
-           <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
-             <label>Início:</label>
-             <input type="date" id="fr-rotina-d1" value="${defaultStart}">
-           </div>
-           <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
-             <label>Fim:</label>
-             <input type="date" id="fr-rotina-d2" value="${defaultEnd}">
-           </div>
-           <button class="btn btn-primary" style="height: 42px; margin-bottom: 0;" onclick="aplicarFiltroRelatorioRotinas()">Filtrar</button>
-        </div>`;
-  }
-  
-  function aplicarFiltroRelatorio() {
-      const rawStatus = document.getElementById('fr-status').value;
-      const statusToSend = (rawStatus === 'Ativas') ? 'Todos' : rawStatus;
-
-      const f = { 
-        status: statusToSend, 
-        setor: document.getElementById('fr-setor').value, // ALTERAÇÃO: Envia Setor
-        dataInicio: document.getElementById('fr-d1').value, 
-        dataFim: document.getElementById('fr-d2').value 
-      };
-      
-      const tbl = document.getElementById('relatorios-table-os');
-      tbl.innerHTML = '<tr><td colspan="7">Carregando...</td></tr>';
-      
-      google.script.run
-        .withSuccessHandler(list => {
-            if (!list || list.length === 0) {
-                tbl.innerHTML = '<thead><tr><th>ID</th><th>Data</th><th>Solicitante</th><th>Setor</th><th>Desc</th><th>Status</th><th>Técnico</th></tr></thead><tbody><tr><td colspan="7">Nada encontrado no período.</td></tr></tbody>';
-                return;
-            }
-
-            let dataToRender = list;
-            if (rawStatus === 'Ativas') {
-                dataToRender = list.filter(r => r[6] !== 'Concluída' && r[6] !== 'Cancelada');
-            }
-
-            if (dataToRender.length === 0) {
-                tbl.innerHTML = '<thead><tr><th>ID</th><th>Data</th><th>Solicitante</th><th>Setor</th><th>Desc</th><th>Status</th><th>Técnico</th></tr></thead><tbody><tr><td colspan="7">Nenhuma OS Ativa encontrada.</td></tr></tbody>';
-                return;
-            }
-
-            const groups = {};
-            dataToRender.forEach(o => {
-                const status = o[6] || 'Sem Status';
-                if (!groups[status]) groups[status] = [];
-                groups[status].push(o);
-            });
-
-            const sortedStatuses = Object.keys(groups).sort();
-
-            let html = '<thead><tr><th>ID</th><th>Data</th><th>Solicitante</th><th>Setor</th><th>Desc</th><th>Status</th><th>Técnico</th></tr></thead><tbody>';
-            
-            sortedStatuses.forEach(status => {
-                html += `<tr style="background-color: #e0e0e0; font-weight: bold;"><td colspan="7" style="text-align:left; padding: 12px; border-bottom: 2px solid #ccc;">STATUS: ${status.toUpperCase()} (${groups[status].length})</td></tr>`;
-                groups[status].forEach(o => {
-                     html += `<tr><td>${o[0]}</td><td>${o[1]}</td><td>${o[3]}</td><td>${o[4]}</td><td>${o[5]}</td><td><span class="status-span ${getStatusClass(o[6])}">${o[6]}</span></td><td>${o[7]}</td></tr>`; 
-                });
-            });
-
-            tbl.innerHTML = html + '</tbody>';
-        })
-        .withFailureHandler(error => {
-            tbl.innerHTML = `<tr><td colspan="7" style="color:red; font-weight:bold;">Erro no servidor: ${error.message}</td></tr>`;
-        })
-        .filtrarOS(f);
-  }
-
-  // --- NOVA FUNÇÃO: Filtrar e Renderizar Relatório de Rotinas ---
-  function aplicarFiltroRelatorioRotinas() {
-      const f = { 
-        tecnico: document.getElementById('fr-rotina-tec').value, 
-        dataInicio: document.getElementById('fr-rotina-d1').value, 
-        dataFim: document.getElementById('fr-rotina-d2').value 
-      };
-      
-      const tbl = document.getElementById('relatorios-table-rotinas');
-      if(tbl) tbl.innerHTML = '<tr><td colspan="3">Carregando...</td></tr>';
-      
-      google.script.run
-        .withSuccessHandler(list => {
-            if (!list || list.length === 0) {
-                if(tbl) tbl.innerHTML = '<thead><tr><th>Data/Hora</th><th>Técnico</th><th>Descrição</th></tr></thead><tbody><tr><td colspan="3">Nada encontrado no período.</td></tr></tbody>';
-                return;
-            }
-
-            let html = '<thead><tr><th>Data/Hora</th><th>Técnico</th><th>Descrição</th></tr></thead><tbody>';
-            list.forEach(r => {
-                // r[0]=Data, r[1]=Tecnico, r[2]=Desc, r[3]=Url
-                html += `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`; 
-            });
-            if(tbl) tbl.innerHTML = html + '</tbody>';
-        })
-        .withFailureHandler(error => {
-            if(tbl) tbl.innerHTML = `<tr><td colspan="3" style="color:red; font-weight:bold;">Erro: ${error.message}</td></tr>`;
-        })
-        .filtrarRotinas(f);
-  }
-
-  function imprimirRelatorio() { const w = window.open('','','width=800,height=600'); w.document.write('<html><body><h2>Relatório OS</h2>'+document.getElementById('relatorios-table-os').outerHTML+'</body></html>'); w.document.close(); w.print(); }
-  function imprimirConsultaRotinas() { const w = window.open('','','width=800,height=600'); w.document.write('<html><body><h2>Rotinas</h2>'+document.getElementById('rotinas-table').outerHTML+'</body></html>'); w.document.close(); w.print(); }
-
-  /** * =================================================================
-   * 8. ADMINISTRAÇÃO (USERS, LOGS, POPUP)
-   * =================================================================
-   */
-  function loadAdminUsersTable() {
-      const tbody = document.querySelector('#admin-users-table tbody'); tbody.innerHTML = '<tr><td colspan="4">Carregando...</td></tr>';
-      google.script.run.withSuccessHandler(list => {
-          tbody.innerHTML = ''; list.forEach(u => { const row = tbody.insertRow(); row.insertCell(0).textContent = u[0]; row.insertCell(1).textContent = u[1]; row.insertCell(2).textContent = u[2]; const btn = document.createElement('button'); btn.textContent = 'Editar'; btn.className='btn btn-secondary'; btn.onclick = () => openUserModal(u); row.insertCell(3).appendChild(btn); }); adminUserListCache = list; 
-      }).getAllUsers(loggedUser.email);
-  }
-  
-  function openUserModal(u) {
-      document.getElementById('user-admin-modal').style.display='block';
-      if (u) { document.getElementById('user-modal-title').textContent = 'Editar Utilizador'; document.getElementById('user-email').value = u[0]; document.getElementById('user-email').disabled=true; document.getElementById('user-nome').value = u[1]; document.getElementById('user-nivel').value = u[2]; document.getElementById('user-senha').placeholder = 'Vazio mantem'; document.getElementById('user-modal-delete-btn').style.display='block'; } else { document.getElementById('user-modal-title').textContent = 'Novo Utilizador'; document.getElementById('user-email').value = ''; document.getElementById('user-email').disabled=false; document.getElementById('user-nome').value = ''; document.getElementById('user-senha').placeholder = 'Obrigatória'; document.getElementById('user-modal-delete-btn').style.display='none'; }
-  }
-  
-  function saveUser() { const u = { email: document.getElementById('user-email').value, nome: document.getElementById('user-nome').value, nivel: document.getElementById('user-nivel').value, senha: document.getElementById('user-senha').value }; google.script.run.withSuccessHandler(r => { if (r.status==='sucesso') { document.getElementById('user-admin-modal').style.display='none'; loadAdminUsersTable(); } else alert(r.message); }).saveUser(loggedUser.email, u); }
-  function deleteUser() { if(confirm('Excluir?')) { const email = document.getElementById('user-email').value; google.script.run.withSuccessHandler(r => { if (r.status==='sucesso') { document.getElementById('user-admin-modal').style.display='none'; loadAdminUsersTable(); } else alert(r.message); }).deleteUser(loggedUser.email, email); } }
-
-  function loadActionLogs() { google.script.run.withSuccessHandler(logs => { const tbody = document.querySelector('#admin-logs-table tbody'); let html = ''; logs.forEach(l => html+=`<tr><td>${l[0]}</td><td>${l[1]}</td><td>${l[2]}</td><td>${l[3]}</td></tr>`); tbody.innerHTML = html; }).getActionLogs(loggedUser.email); }
-  
-  // =========================================================
-  // CORREÇÃO E MELHORIA DAS FUNÇÕES DO POP-UP
-  // =========================================================
-  function loadPopUpConfigAdmin() { 
-      google.script.run.withSuccessHandler(c => { 
-          const isEnabled = String(c.habilitado).toUpperCase() === 'TRUE';
-          document.getElementById('popup-subcontent').innerHTML = `
-            <h4>Pop-up Login</h4>
-            <div class="form-group">
-                <label>Ativo:</label>
-                <select id="pp-en">
-                    <option value="TRUE" ${isEnabled ? 'selected' : ''}>Sim</option>
-                    <option value="FALSE" ${!isEnabled ? 'selected' : ''}>Não</option>
+        <div class="pagination-controls-wrapper">
+            <div class="pagination-page-size">
+                <label for="os-page-size">Itens por página:</label>
+                <select id="os-page-size" onchange="changeOSPageSize(this.value)">
+                    <option value="25" ${pageSize === 25 ? 'selected' : ''}>25</option>
+                    <option value="50" ${pageSize === 50 ? 'selected' : ''}>50</option>
+                    <option value="100" ${pageSize === 100 ? 'selected' : ''}>100</option>
+                    <option value="200" ${pageSize === 200 ? 'selected' : ''}>200</option>
                 </select>
             </div>
-            <div class="form-group">
-                <label>Imagem URL (Opcional):</label>
-                <input type="text" id="pp-img" value="${c.imageUrl || ''}" placeholder="https://...">
+            <div class="pagination-buttons">
+    `;
+
+    // Primeira Página
+    html += `<button class="btn btn-secondary" onclick="aplicarFiltroPainel(1)" ${currentPage === 1 ? 'disabled' : ''} title="Primeira Página">«</button>`;
+    
+    // Anterior
+    html += `<button class="btn btn-secondary" onclick="aplicarFiltroPainel(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>Anterior</button>`;
+
+    // Números de Página (Sliding Window)
+    const delta = 2;
+    const left = currentPage - delta;
+    const right = currentPage + delta + 1;
+    const range = [];
+    const rangeWithDots = [];
+    let l;
+
+    for (let i = 1; i <= totalPages; i++) {
+        if (i === 1 || i === totalPages || (i >= left && i < right)) {
+            range.push(i);
+        }
+    }
+
+    for (let i of range) {
+        if (l) {
+            if (i - l === 2) {
+                rangeWithDots.push(l + 1);
+            } else if (i - l !== 1) {
+                rangeWithDots.push('...');
+            }
+        }
+        rangeWithDots.push(i);
+        l = i;
+    }
+
+    rangeWithDots.forEach(p => {
+        if (p === '...') {
+            html += `<span class="pagination-dots">...</span>`;
+        } else {
+            html += `<button class="btn ${p === currentPage ? 'btn-primary' : 'btn-secondary'}" onclick="aplicarFiltroPainel(${p})">${p}</button>`;
+        }
+    });
+
+    // Próxima
+    html += `<button class="btn btn-secondary" onclick="aplicarFiltroPainel(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Próxima</button>`;
+    
+    // Última Página
+    html += `<button class="btn btn-secondary" onclick="aplicarFiltroPainel(${totalPages})" ${currentPage === totalPages ? 'disabled' : ''} title="Última Página">»</button>`;
+
+    html += `
             </div>
-            <div class="form-group">
-                <label>Msg:</label>
-                <textarea id="pp-msg" rows="4">${c.mensagem}</textarea>
-            </div>
-            <button class="btn btn-primary" onclick="savePopUp()">Salvar</button>`; 
-      }).getConfiguracaoPopUp(); 
-  }
+        </div>
+    `;
 
-  function savePopUp() { 
-      const c = { 
-          habilitado: document.getElementById('pp-en').value, 
-          mensagem: document.getElementById('pp-msg').value,
-          imageUrl: document.getElementById('pp-img').value // Adicionado campo de imagem
-      }; 
-      google.script.run.withSuccessHandler(r => alert(r.message)).saveConfiguracaoPopUp(loggedUser.email, c); 
-  }
-  
-  function loadPopUpOnLoginScreen() { 
-      google.script.run.withSuccessHandler(c => { 
-          // Correção: Converter para string e maiúsculo para garantir comparação
-          if (String(c.habilitado).toUpperCase() === 'TRUE') { 
-              document.getElementById('popup-content').textContent = c.mensagem; 
-              
-              // Verifica se tem imagem para mostrar
-              const img = document.getElementById('popup-image');
-              if (img && c.imageUrl) {
-                  img.src = c.imageUrl;
-                  img.style.display = 'block';
-              } else if (img) {
-                  img.style.display = 'none';
-              }
-              
-              document.getElementById('popup-modal').style.display = 'block'; 
-          } 
-      }).getConfiguracaoPopUp(); 
-  }
-  // =========================================================
+    container.innerHTML = html;
+}
 
-  function loadMessageSender() { const sel = document.getElementById('msg-recipient-user'); const fill = (list) => { sel.innerHTML = '<option value="">-</option>'+list.map(u => `<option value="${u[0]}">${u[1]}</option>`).join(''); }; if (adminUserListCache.length > 0) fill(adminUserListCache); else google.script.run.withSuccessHandler(l => { adminUserListCache=l; fill(l); }).getAllUsers(loggedUser.email); }
-  function sendMessage() { const dest = document.getElementById('msg-recipient-user').value; const msg = document.getElementById('msg-content').value; if (!dest || !msg) return; google.script.run.withSuccessHandler(r => { showMessage('msg-send-message', r.message, r.status==='sucesso'); if(r.status==='sucesso') document.getElementById('msg-content').value = ''; }).sendMessageToUser(loggedUser.email, dest, msg); }
-  function loadMyMessages() { const container = document.getElementById('my-messages-container'); google.script.run.withSuccessHandler(msgs => { if (msgs.length===0) { container.innerHTML='<p class="no-messages">Sem mensagens.</p>'; return; } let html = ''; msgs.forEach(m => { html += `<div class="message-item"><div class="message-header">${m[1]} <span>${m[0]}</span></div><div class="message-body">${m[2]}</div></div>`; }); container.innerHTML = html; }).getMessagesForUser(loggedUser.email); }
-  function submitChangePassword() { const old = document.getElementById('cp-old-password').value; const newP = document.getElementById('cp-new-password').value; google.script.run.withSuccessHandler(r => showMessage('change-password-message', r.message, r.status==='sucesso')).changeUserPassword(loggedUser.email, old, newP); }
-  function openMessageNotificationTab() { document.getElementById('message-notification-modal').style.display='none'; openTab('minha-conta'); }
+function changeOSPageSize(newSize) {
+    osPaginationState.pageSize = parseInt(newSize);
+    aplicarFiltroPainel(1);
+}
 
-  /** * =================================================================
-   * 9. NOTIFICAÇÕES E WAKE LOCK
-   * =================================================================
-   */
-  async function requestWakeLock() { if ('wakeLock' in navigator && wakeLock === null) { try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {} } }
-  function releaseWakeLock() { if (wakeLock) { wakeLock.release(); wakeLock = null; } }
-  function handleWakeLockVisibility() { if (document.visibilityState === 'visible') requestWakeLock(); }
+function toggleDetailsRow(row, osData) {
+    row.classList.toggle('expanded');
+    const existingDetails = row.nextElementSibling;
 
-  function startOSNotifier() { google.script.run.withSuccessHandler(id => { lastKnownOSID = id; if (osCheckInterval) clearInterval(osCheckInterval); osCheckInterval = setInterval(checkForNewOS, SLOW_INTERVAL); }).getLatestOSID(); }
-  function checkForNewOS() { if(unreadOSAlarm) return; google.script.run.withSuccessHandler(id => { if (id > lastKnownOSID) { showToast(`🔔 Nova OS #${id}!`); startAudioLoop(); lastKnownOSID = id; if (document.getElementById('painel-os').classList.contains('active')) loadPainelOS(); } }).getLatestOSID(); }
-  function startUpdateNotifier() { if (updateCheckInterval) clearInterval(updateCheckInterval); updateCheckInterval = setInterval(checkForUpdates, SLOW_INTERVAL); }
-  function checkForUpdates() { if(remoteAssignmentAlarm) return; google.script.run.withSuccessHandler(r => { if (r.updateFound) { lastUpdateCheckTimestamp = r.newTimestamp; showToast(r.updateType==='remote' ? '🚨 OS atualizada remotamente!' : '📝 Atualização local.'); if (r.updateType==='remote') startRemoteAudioLoop(); if (document.getElementById('painel-os').classList.contains('active')) loadPainelOS(); } }).getUpdatesForTecnico(loggedUser.nome, lastUpdateCheckTimestamp); }
+    if (existingDetails && existingDetails.classList.contains('details-row')) {
+        existingDetails.remove();
+        return;
+    }
 
-  function startAudioLoop() { 
-      if (loggedUser && loggedUser.nivel.toLowerCase() === 'gerente') return; // Bloqueio para gerente
-      saveAlarmState(true); 
-      if (audioLoopInterval) return; 
-      playNotificationSound(0.8, 880); 
-      audioLoopInterval = setInterval(() => playNotificationSound(0.8, 880), AUDIO_INTERVAL); 
-  }
-  
-  function startRemoteAudioLoop() { 
-      if (loggedUser && loggedUser.nivel.toLowerCase() === 'gerente') return; // Bloqueio para gerente
-      saveRemoteAlarmState(true); 
-      if (remoteAudioLoopInterval) return; 
-      playNotificationSound(1, 1200); 
-      remoteAudioLoopInterval = setInterval(() => playNotificationSound(1, 1200), AUDIO_INTERVAL); 
-  }
-  
-  function stopAudioLoop() { saveAlarmState(false); clearInterval(audioLoopInterval); audioLoopInterval=null; }
-  function stopRemoteAudioLoop() { saveRemoteAlarmState(false); clearInterval(remoteAudioLoopInterval); remoteAudioLoopInterval=null; }
+    const detailsRow = row.parentNode.insertRow(row.rowIndex);
+    detailsRow.className = 'details-row';
+    
+    const detailsCell = detailsRow.insertCell(0);
+    detailsCell.colSpan = row.cells.length;
+    detailsCell.className = 'details-cell';
+    
+    detailsCell.innerHTML = `
+        <p><strong>Solicitante:</strong> ${escapeHtml(osData[3])}</p>
+        <p><strong>Setor:</strong> ${escapeHtml(osData[4])}</p>
+        <p><strong>Técnico:</strong> ${escapeHtml(osData[7] || '-')}</p>
+        <hr>
+        <p><strong>Descrição Completa:</strong></p>
+        <p style="white-space: pre-wrap;">${escapeHtml(osData[5])}</p>
+        <button class="btn btn-primary" style="margin-top:10px;" onclick='openOSModal(${JSON.stringify(osData)})'>Ver / Editar Detalhes</button>
+    `;
+}
 
-  // --- Sistema de Notificação de Mensagens Privadas (Admin) ---
-  function startPrivateMessageNotifier() {
-      // Verifica imediatamente
-      checkForPrivateMessages();
-      // Inicia intervalo de 15 segundos
-      if (privateMsgCheckInterval) clearInterval(privateMsgCheckInterval);
-      privateMsgCheckInterval = setInterval(checkForPrivateMessages, 15000); 
-  }
+function openOSModal(osData) {
+    currentOSId = osData[0];
+    const userLevel = loggedUser.nivel.toLowerCase();
+    
+    showLoading();
+    google.script.run.withSuccessHandler(fullOS => {
+        hideLoading();
+        if (!fullOS) { alert('OS não encontrada.'); return; }
 
-  function stopPrivateMessageNotifier() {
-      if (privateMsgCheckInterval) clearInterval(privateMsgCheckInterval);
-      privateMsgCheckInterval = null;
-      stopPrivateMsgAudio();
-  }
+        const urls = (fullOS[11] || '').split('\n').filter(u => u.trim() !== '');
+        const imagesHtml = urls.map(u => {
+            const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(u) || u.includes('drive.google.com');
+            if (isImage) {
+                const thumbnailUrl = u.replace('/view', '/thumbnail');
+                return `<a href="javascript:void(0)" onclick="event.stopPropagation(); showImageModal('${u}')">
+                            <img src="${thumbnailUrl}" style="width:100px; height:100px; object-fit:cover; border-radius:5px; margin:5px;" alt="Anexo de Imagem" title="Clique para ampliar">
+                        </a>`;
+            }
+            return `<a href="${u}" target="_blank" class="file-attachment-link" style="margin:5px;">Ver Anexo</a>`;
+        }).join('');
 
-  function checkForPrivateMessages() {
-      if (!loggedUser) return;
-      google.script.run.withSuccessHandler(hasUnread => {
-         if (hasUnread) {
-             // Se tem msg não lida, mostra aviso e toca som
-             const modal = document.getElementById('message-notification-modal');
-             // Só reativa o loop se o modal não estiver visível (evita reiniciar loop se usuário já está ouvindo)
-             if (modal.style.display !== 'block') {
-                 modal.style.display = 'block';
-                 startPrivateMsgAudioLoop();
-             }
-         }
-      }).checkForUnreadMessages(loggedUser.email);
-  }
+        document.getElementById('modal-os-id').textContent = fullOS[0];
+        document.getElementById('modal-details').innerHTML = `
+          <p><strong>Solicitante:</strong> ${escapeHtml(fullOS[3])} &nbsp;|&nbsp; <strong>Setor:</strong> ${escapeHtml(fullOS[4])}</p>
+          <p><strong>Data Abertura:</strong> ${fullOS[1]} &nbsp;|&nbsp; <strong>Última Atualização:</strong> ${fullOS[10]}</p>
+          <p><strong>Descrição:</strong><br><pre style="white-space:pre-wrap; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 5px;">${escapeHtml(fullOS[5])}</pre></p>
+          <p><strong>Observações:</strong><br><pre style="white-space:pre-wrap; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 5px;">${escapeHtml(fullOS[8])}</pre></p>
+          ${imagesHtml ? `<h4>Anexos:</h4><div style="display:flex; flex-wrap:wrap; align-items:center;">${imagesHtml}</div>` : ''}
+        `;
 
-  function startPrivateMsgAudioLoop() {
-      if (loggedUser && loggedUser.nivel.toLowerCase() === 'gerente') return; // Bloqueio para gerente
-      if (privateMsgAudioLoop) return; // Já está tocando
-      
-      // Toca a primeira vez
-      playNotificationSound(1, 1500); // Frequência mais alta para diferenciar de OS
-      
-      // Loop a cada 10 segundos
-      privateMsgAudioLoop = setInterval(() => {
-          playNotificationSound(1, 1500);
-      }, AUDIO_INTERVAL);
-  }
+        const canEdit = ['admin', 'gerente', 'tecnico'].includes(userLevel);
+        const canChangePriority = ['admin', 'gerente'].includes(userLevel);
 
-  function stopPrivateMsgAudio() {
-      if (privateMsgAudioLoop) {
-          clearInterval(privateMsgAudioLoop);
-          privateMsgAudioLoop = null;
-      }
-  }
+        if (canEdit) {
+            const prioOptions = ['Baixa', 'Média', 'Alta'].map(p => `<option value="${p}" ${p === fullOS[9] ? 'selected' : ''}>${p}</option>`).join('');
+            const tecnicoOptions = tecnicosList.map(t => `<option value="${t}" ${t === fullOS[7] ? 'selected' : ''}>${t}</option>`).join('');
+            
+            document.getElementById('modal-edit-form').innerHTML = `
+                <h4>Atualizar OS</h4>
+                <div class="form-group"><label>Status:</label><select id="modal-status">
+                    <option value="Aberta" ${'Aberta' === fullOS[6] ? 'selected' : ''}>Aberta</option>
+                    <option value="Em Andamento" ${'Em Andamento' === fullOS[6] ? 'selected' : ''}>Em Andamento</option>
+                    <option value="Pendente" ${'Pendente' === fullOS[6] ? 'selected' : ''}>Pendente</option>
+                    <option value="Concluída" ${'Concluída' === fullOS[6] ? 'selected' : ''}>Concluída</option>
+                    <option value="Cancelada" ${'Cancelada' === fullOS[6] ? 'selected' : ''}>Cancelada</option>
+                </select></div>
+                <div class="form-group"><label>Técnico:</label><select id="modal-tecnico"><option value="">-- Nenhum --</option>${tecnicoOptions}</select></div>
+                <div class="form-group"><label>Prioridade:</label><select id="modal-prioridade" ${!canChangePriority ? 'disabled' : ''}>${prioOptions}</select></div>
+                <div class="form-group"><label>Nova Observação:</label><textarea id="modal-obs" rows="3"></textarea></div>
+                <div class="form-group"><label>Anexar Imagens:</label><input type="file" id="modal-anexo" multiple accept="image/*" onchange="handleModalFileChange(event)"><small id="modal-anexo-filename"></small></div>
+                <button class="btn btn-primary btn-full" onclick="submitOSUpdate()">Salvar</button>
+            `;
+        } else {
+            document.getElementById('modal-edit-form').innerHTML = '';
+        }
 
-  function playNotificationSound(vol, freq) { try { const ctx = new (window.AudioContext || window.webkitAudioContext)(); const osc = ctx.createOscillator(); const gain = ctx.createGain(); osc.connect(gain); gain.connect(ctx.destination); osc.frequency.value = freq; gain.gain.value = vol; osc.start(); setTimeout(() => osc.stop(), 200); } catch(e) {} }
-  function showToast(msg) { const t = document.getElementById('os-toast'); t.innerHTML = `${msg} <button onclick="this.parentElement.className='toast'">x</button>`; t.className = 'toast show'; }
+        document.getElementById('os-modal').style.display = 'block';
+
+        if (loggedUser.nivel.toLowerCase() === 'tecnico') {
+          google.script.run.marcarOSComoVista(currentOSId, loggedUser.nome);
+        }
+
+    }).withFailureHandler(() => hideLoading()).getOSById(currentOSId);
+}
+
+function submitOSUpdate() {
+    const status = document.getElementById('modal-status').value;
+    const obs = document.getElementById('modal-obs').value;
+    const tecnico = document.getElementById('modal-tecnico').value;
+    const prioridade = document.getElementById('modal-prioridade').value;
+    
+    showLoading();
+    google.script.run.withSuccessHandler(res => {
+        hideLoading();
+        if (res.status === 'sucesso') {
+            showMessage('modal-message', 'OS atualizada com sucesso!', true);
+            setTimeout(() => {
+                document.getElementById('os-modal').style.display = 'none';
+                aplicarFiltroPainel(osPaginationState.currentPage);
+            }, 1000);
+        } else {
+            showMessage('modal-message', 'Falha ao atualizar: ' + res.message, false);
+        }
+    }).withFailureHandler(() => hideLoading()).atualizarOS(currentOSId, status, obs, tecnico, prioridade, loggedUser.email, modalFilesToUpload);
+}
+
+
+/**
+ * -----------------------------------------------------------------
+ * MÓDULO 4: RELATÓRIOS E ESTATÍSTICAS
+ * -----------------------------------------------------------------
+ */
+function loadRelatorioControls() {
+    const tecSelect = document.getElementById('rel-tecnico');
+    if (tecSelect && tecSelect.options.length <= 1) {
+        tecSelect.innerHTML += tecnicosList.map(t => `<option value="${t}">${t}</option>`).join('');
+    }
+    const setorSelect = document.getElementById('rel-setor');
+    if (setorSelect && setorSelect.options.length <= 1) {
+        setorSelect.innerHTML += setoresList.map(s => `<option value="${s}">${s}</option>`).join('');
+    }
+}
+
+function aplicarFiltroRelatorio() {
+    const dateRange = osReportDatePicker.getDateRange();
+    const statusDesejado = document.getElementById('rel-status')?.value || 'Todos';
+    
+    const filtros = {
+        dataInicio: dateRange.startDate,
+        dataFim: dateRange.endDate,
+        status: statusDesejado === 'Ativas' ? 'Todos' : statusDesejado,
+        tecnico: document.getElementById('rel-tecnico')?.value || 'Todos',
+        setor: document.getElementById('rel-setor')?.value || 'Todos'
+    };
+    
+    const table = document.getElementById('relatorios-table-os');
+    if(table) table.innerHTML = `<tbody><tr><td colspan="8" style="text-align: center;">A carregar dados...</td></tr></tbody>`;
+    
+    showLoading();
+    google.script.run
+        .withSuccessHandler((data) => {
+            if (statusDesejado === 'Ativas' && Array.isArray(data)) {
+                const statusPermitidos = ['Aberta', 'Em Andamento', 'Pendente'];
+                data = data.filter(row => statusPermitidos.includes(row[6]));
+            }
+            renderRelatorioTable(data);
+        })
+        .withFailureHandler((err) => {
+            hideLoading();
+            if(table) table.innerHTML = `<tbody><tr><td colspan="8" style="color:red; text-align:center;">Erro: ${err.message}</td></tr></tbody>`;
+        })
+        .getRelatorioOS(filtros);
+}
+
+function renderRelatorioTable(data) {
+    hideLoading();
+    const table = document.getElementById('relatorios-table-os');
+    if (!table) return;
+    
+    let html = '<thead><tr><th>ID</th><th>Data</th><th>Solicitante</th><th>Setor</th><th>Descrição</th><th>Status</th><th>Técnico</th><th>Prioridade</th></tr></thead><tbody>';
+    
+    try {
+        let processedGroups = null;
+
+        if (data && typeof data === 'object' && !Array.isArray(data) && data.groups) {
+            processedGroups = data.groups;
+        } else if (Array.isArray(data) && data.length > 0) {
+            processedGroups = {};
+            data.forEach(row => {
+                const status = row[6] || 'Desconhecido';
+                if (!processedGroups[status]) {
+                    processedGroups[status] = { count: 0, items: [] };
+                }
+                processedGroups[status].items.push(row);
+                processedGroups[status].count++;
+            });
+        }
+
+        if (!processedGroups || Object.keys(processedGroups).length === 0) {
+            html += '<tr><td colspan="8" style="text-align: center;">Nenhum registo encontrado.</td></tr>';
+        } else {
+            for (const status in processedGroups) {
+                const group = processedGroups[status];
+                html += `
+                    <tr class="group-header" style="background: rgba(127, 90, 240, 0.15);">
+                        <td colspan="8" style="text-align: center; font-weight: bold; color: var(--primary-color);">
+                            Status: ${escapeHtml(status)} (${group.count} O.S.)
+                        </td>
+                    </tr>`;
+                
+                group.items.forEach(row => {
+                    html += `<tr>
+                        <td>${row[0]}</td>
+                        <td>${row[1]}</td>
+                        <td>${row[3]}</td>
+                        <td>${row[4]}</td>
+                        <td>${escapeHtml(row[5])}</td>
+                        <td>${row[6]}</td>
+                        <td>${row[7]}</td>
+                        <td>${escapeHtml(row[9])}</td>
+                    </tr>`;
+                });
+            }
+        }
+    } catch (e) {
+        html += `<tr><td colspan="8" style="color: red; text-align: center;">Erro interno: ${e.message}</td></tr>`;
+    }
+    
+    html += '</tbody>';
+    table.innerHTML = html;
+}
+
+function imprimirRelatorio() {
+    const table = document.getElementById('relatorios-table-os');
+    
+    const statusText = document.getElementById('rel-status')?.value || 'Todos';
+    const tecSelect = document.getElementById('rel-tecnico');
+    const tecText = tecSelect ? (tecSelect.value === 'Todos' ? 'Todos' : tecSelect.options[tecSelect.selectedIndex].text) : 'Todos';
+    const setorSelect = document.getElementById('rel-setor');
+    const setorText = setorSelect ? (setorSelect.value === 'Todos' ? 'Todos' : setorSelect.options[setorSelect.selectedIndex].text) : 'Todos';
+    
+    const dateRange = osReportDatePicker.getDateRange();
+    let dateText;
+    if (dateRange.key === 'custom') {
+        const start = formatDateToDDMMYYYY(dateRange.startDate);
+        const end = formatDateToDDMMYYYY(dateRange.endDate);
+        dateText = (start && end) ? `${start} a ${end}` : 'Personalizado';
+    } else {
+        dateText = osReportDatePicker.predefinedRanges[dateRange.key];
+    }
+
+    const title = `Relatório de Ordens de Serviço`;
+    const subtitle = `Filtros: Status - ${statusText} | Técnico - ${tecText} | Setor - ${setorText} | Período - ${dateText}`;
+    
+    let printWindow = window.open('', '_blank');
+    printWindow.document.write('<html><head><title>' + title + '</title>');
+    printWindow.document.write('<style>body{font-family:Arial,sans-serif;font-size:12px} table{width:100%;border-collapse:collapse} th,td{border:1px solid #ddd;padding:8px;text-align:left} th{background-color:#f2f2f2} h1,p{margin-bottom:10px;}</style>');
+    printWindow.document.write('</head><body>');
+    printWindow.document.write('<h1>' + title + '</h1>');
+    printWindow.document.write('<p>' + subtitle + '</p>');
+    printWindow.document.write(table.outerHTML);
+    printWindow.document.write('</body></html>');
+    printWindow.document.close();
+    printWindow.focus();
+    
+    setTimeout(() => { printWindow.print(); }, 500);
+}
+
+function loadStatistics() {
+    const dateRange = statsDatePicker.getDateRange();
+    const d1 = dateRange.startDate;
+    const d2 = dateRange.endDate;
+    showLoading();
+    google.script.run.withSuccessHandler(renderDashboardStats).withFailureHandler(() => hideLoading()).getDashboardStatistics(loggedUser.email, d1, d2);
+}
+
+function renderDashboardStats(stats) {
+    console.log("Renderizando estatísticas:", stats);
+    hideLoading();
+    if (!stats) {
+        console.error("Nenhum dado de estatística recebido.");
+        return;
+    }
+
+    const container = document.getElementById('stats-dashboard-container');
+    if (container) {
+        container.innerHTML = `
+          <div class="stat-card"><div class="stat-number">${stats.total || 0}</div><div>Total de O.S.</div></div>
+          <div class="stat-card"><div class="stat-number" style="color: var(--secondary-color);">${stats.abertas || 0}</div><div>Abertas</div></div>
+          <div class="stat-card"><div class="stat-number" style="color: var(--warning-color);">${stats.andamento || 0}</div><div>Em Andamento</div></div>
+          <div class="stat-card"><div class="stat-number" style="color: var(--success-color);">${stats.concluidas || 0}</div><div>Concluídas</div></div>
+          <div class="stat-card"><div class="stat-number">${stats.avgResolutionTime || 'N/A'}</div><div>Tempo Médio Resolução</div></div>
+        `;
+    }
+
+    if (!isChartsLoaded || typeof google === 'undefined' || !google.visualization || !google.visualization.arrayToDataTable) {
+        console.warn("Google Charts ainda não carregado ou visualização indisponível. Aguardando...");
+        setTimeout(() => renderDashboardStats(stats), 800);
+        return;
+    }
+
+    try {
+        // 1. Gráfico de Status
+        const statusContainer = document.getElementById('status-column-chart');
+        if (statusContainer && stats.chartData && stats.chartData.length > 1) {
+            const statusData = google.visualization.arrayToDataTable(stats.chartData);
+            const statusOptions = { 
+                title:'O.S. por Status', 
+                backgroundColor: 'transparent', 
+                legend: {textStyle: {color: '#CBD2F1'}}, 
+                titleTextStyle: {color: '#CBD2F1'}, 
+                hAxis:{textStyle:{color:'#CBD2F1'}}, 
+                vAxis:{textStyle:{color:'#CBD2F1'}, gridlines: {color: '#334155'}} 
+            };
+            const statusChart = new google.visualization.ColumnChart(statusContainer);
+            statusChart.draw(statusData, statusOptions);
+        }
+
+        // 2. Gráfico de Setores
+        const sectorContainer = document.getElementById('sector-pie-chart');
+        if(sectorContainer && stats.sectorChartData && stats.sectorChartData.length > 1) {
+            const sectorData = google.visualization.arrayToDataTable(stats.sectorChartData);
+            const sectorOptions = { 
+                title: 'O.S. Criadas por Setor', 
+                backgroundColor: 'transparent', 
+                legend: {textStyle: {color: '#CBD2F1'}, position: 'right'}, 
+                titleTextStyle: {color: '#CBD2F1'}, 
+                pieHole: 0.4,
+                chartArea: { width: '90%', height: '80%' }
+            };
+            const sectorChart = new google.visualization.PieChart(sectorContainer);
+            sectorChart.draw(sectorData, sectorOptions);
+        }
+
+        // 3. Gráfico de Performance dos Técnicos
+        const techContainer = document.getElementById('tech-performance-chart');
+        if(techContainer && stats.techPerformanceData && stats.techPerformanceData.length > 1) {
+            const techData = google.visualization.arrayToDataTable(stats.techPerformanceData);
+            const techOptions = { 
+                title: 'Performance dos Técnicos (OS vs Diário)', 
+                backgroundColor: 'transparent', 
+                legend: {position: 'top', textStyle: {color: '#CBD2F1'}}, 
+                titleTextStyle: {color: '#CBD2F1'}, 
+                hAxis:{textStyle:{color:'#CBD2F1'}}, 
+                vAxis:{textStyle:{color:'#CBD2F1'}, gridlines: {color: 'transparent'}}, 
+                seriesType: 'bars' 
+            };
+            const techChart = new google.visualization.ComboChart(techContainer);
+            techChart.draw(techData, techOptions);
+        }
+        
+        // 4. Gráfico de Ontem
+        const yesterdayContainer = document.getElementById('yesterday-completed-chart');
+        if (yesterdayContainer && stats.yesterdayTechPerformanceChartData && stats.yesterdayTechPerformanceChartData.length > 1) {
+            const yesterdayData = google.visualization.arrayToDataTable(stats.yesterdayTechPerformanceChartData);
+            const yesterdayOptions = {
+                title: 'Atividades Concluídas Ontem por Técnico',
+                backgroundColor: 'transparent',
+                legend: { textStyle: { color: '#CBD2F1' } },
+                titleTextStyle: { color: '#CBD2F1' },
+                hAxis: { textStyle: { color: '#CBD2F1' } },
+                vAxis: { textStyle: { color: '#CBD2F1' } },
+                isStacked: true,
+                series: { 0: { color: '#2CB67D' }, 1: { color: '#ffc107' }, 2: { color: '#00BFFF' } }
+            };
+            const yesterdayChart = new google.visualization.BarChart(yesterdayContainer);
+            yesterdayChart.draw(yesterdayData, yesterdayOptions);
+        }
+    } catch (err) {
+        console.error("Erro ao desenhar gráficos:", err);
+    }
+}
+
+
+/**
+ * -----------------------------------------------------------------
+ * MÓDULO 5: DIÁRIO TÉCNICO E ROTINAS
+ * -----------------------------------------------------------------
+ */
+function submitDiarioTecnico() {
+    const desc = document.getElementById('diario-descricao').value.trim();
+    if (!desc) { showMessage('diario-message', 'A descrição não pode estar vazia.', false); return; }
+
+    let tecnicoNome = '';
+    const userLevel = loggedUser.nivel.toLowerCase();
+
+    if (userLevel === 'admin' || userLevel === 'gerente') {
+        const tecnicoSelect = document.getElementById('diario-tecnico-select');
+        if (tecnicoSelect && tecnicoSelect.value) {
+            tecnicoNome = tecnicoSelect.value;
+        } else {
+            showMessage('diario-message', 'Por favor, selecione um técnico.', false); return;
+        }
+    } else if (userLevel === 'tecnico') {
+        tecnicoNome = loggedUser.nome;
+    }
+
+    if (!tecnicoNome) {
+        showMessage('diario-message', 'Não foi possível identificar o técnico.', false); return;
+    }
+
+    const dateValue = document.getElementById('diario-data').value;
+    
+    showLoading();
+    google.script.run
+        .withSuccessHandler(res => {
+            hideLoading();
+            if (res.status === 'sucesso') {
+                showMessage('diario-message', 'Registro salvo!', true);
+                document.getElementById('diario-descricao').value = '';
+                filesToUpload = [];
+                const inputAnexo = document.getElementById('diario-anexo-input'); if(inputAnexo) inputAnexo.value = '';
+                const display = document.getElementById('diario-anexo-filename-display'); if(display) display.textContent = '';
+                if (loggedUser.nivel.toLowerCase() === 'admin' || loggedUser.nivel.toLowerCase() === 'gerente') {
+                    const tecnicoSelect = document.getElementById('diario-tecnico-select');
+                    if (tecnicoSelect) tecnicoSelect.value = '';
+                }
+            } else {
+                showMessage('diario-message', 'Falha ao salvar: ' + (res.message || 'Erro desconhecido.'), false);
+            }
+        })
+        .withFailureHandler(() => hideLoading())
+        .salvarDiarioTecnico(dateValue, tecnicoNome, desc, filesToUpload);
+}
+
+function openConsultaRotinasModal() {
+    const modal = document.getElementById('consulta-rotinas-modal');
+    if(modal) modal.style.display = 'block';
+    loadDiarioControls();
+    aplicarFiltroDiario();
+}
+
+function loadDiarioControls() {
+    const tecSelect = document.getElementById('diario-filter-tecnico');
+    if (tecSelect && tecSelect.options.length <= 1) {
+        tecSelect.innerHTML += tecnicosList.map(t => `<option value="${t}">${t}</option>`).join('');
+    }
+}
+
+function aplicarFiltroDiario() {
+    const dateRange = diarioDatePicker.getDateRange();
+    const filtros = {
+        dataInicio: dateRange.startDate,
+        dataFim: dateRange.endDate,
+        tecnico: document.getElementById('diario-filter-tecnico')?.value || 'Todos'
+    };
+    
+    const tbody = document.querySelector('#diario-table tbody');
+    if(tbody) tbody.innerHTML = '<tr><td colspan="4">A carregar registos...</td></tr>';
+
+    showLoading();
+    google.script.run.withSuccessHandler(renderDiarioTable).withFailureHandler(() => hideLoading()).filtrarRotinas(filtros);
+}
+
+function renderDiarioTable(data) {
+    hideLoading();
+    const tbody = document.querySelector('#diario-table tbody');
+    if(!tbody) return;
+    let html = '';
+    if (!data || data.length === 0) {
+        html = '<tr><td colspan="4">Nenhum registro encontrado para os filtros selecionados.</td></tr>';
+    } else {
+        data.forEach(row => {
+            const anexos = (row[3] || '').split('\n').filter(u => u.trim() !== '');
+            const anexosHtml = anexos.length > 0
+                ? anexos.map((url, i) => `<a href="${url}" target="_blank">Anexo ${i+1}</a>`).join('<br>')
+                : 'Nenhum';
+
+            html += `<tr>
+                <td>${row[0]}</td>
+                <td>${escapeHtml(row[1])}</td>
+                <td style="white-space:pre-wrap;">${escapeHtml(row[2])}</td>
+                <td>${anexosHtml}</td>
+            </tr>`;
+        });
+    }
+    tbody.innerHTML = html;
+}
+
+function loadRelatorioRotinasControls() {
+    const tecSelect = document.getElementById('rel-rotinas-filter-tecnico');
+    if (tecSelect && tecSelect.options.length <= 1) {
+        tecSelect.innerHTML += tecnicosList.map(t => `<option value="${t}">${t}</option>`).join('');
+    }
+}
+
+function aplicarFiltroRelatorioRotinas() {
+    const dateRange = rotinasReportDatePicker.getDateRange();
+    const filtros = { 
+        dataInicio: dateRange.startDate,
+        dataFim: dateRange.endDate,
+        tecnico: document.getElementById('rel-rotinas-filter-tecnico')?.value || 'Todos' 
+    };
+    
+    const table = document.getElementById('relatorios-table-rotinas');
+    if(table) table.innerHTML = `<tbody><tr><td colspan="4" style="text-align: center;">A carregar registos...</td></tr></tbody>`;
+    
+    showLoading();
+    google.script.run
+        .withSuccessHandler(renderRelatorioRotinasTable)
+        .withFailureHandler(() => hideLoading())
+        .filtrarRotinas(filtros);
+}
+
+function renderRelatorioRotinasTable(data) {
+    hideLoading();
+    const table = document.getElementById('relatorios-table-rotinas');
+    if(!table) return;
+    const nivel = loggedUser.nivel.toLowerCase();
+    let html = '<thead><tr><th>Data</th><th>Técnico</th><th>Descrição</th>' + (nivel === 'admin' ? '<th>Ações</th>' : '') + '</tr></thead><tbody>';
+    if (!data || data.length === 0) {
+        html += '<tr><td colspan="' + (nivel === 'admin' ? 4 : 3) + '">Nenhum registro encontrado.</td></tr>';
+    } else {
+        data.forEach(row => {
+            html += `<tr><td>${row[0]}</td><td>${row[1]}</td><td style="white-space:pre-wrap;">${escapeHtml(row[2])}</td>`;
+            if (nivel === 'admin') {
+                html += `<td><button class="btn btn-secondary" onclick="openRotinaModal('${row[0]}', '${row[1]}', ${row[4]})">Editar</button></td>`;
+            }
+            html += '</tr>';
+        });
+    }
+    html += '</tbody>';
+    table.innerHTML = html;
+}
+
+function imprimirRelatorioRotinas() {
+    const table = document.getElementById('relatorios-table-rotinas');
+    const tecSelect = document.getElementById('rel-rotinas-filter-tecnico');
+    const tecText = tecSelect ? (tecSelect.value === 'Todos' ? 'Todos' : tecSelect.options[tecSelect.selectedIndex].text) : 'Todos';
+    
+    const dateRange = rotinasReportDatePicker.getDateRange();
+    let dateText;
+    if (dateRange.key === 'custom') {
+        const start = formatDateToDDMMYYYY(dateRange.startDate);
+        const end = formatDateToDDMMYYYY(dateRange.endDate);
+        dateText = (start && end) ? `${start} a ${end}` : 'Personalizado';
+    } else {
+        dateText = rotinasReportDatePicker.predefinedRanges[dateRange.key];
+    }
+    
+    const title = `Relatório de Rotinas Diárias`;
+    const subtitle = `Filtros: Técnico - ${tecText} | Período - ${dateText}`;
+    
+    let printWindow = window.open('', '_blank');
+    printWindow.document.write('<html><head><title>' + title + '</title>');
+    printWindow.document.write('<style>body{font-family:Arial,sans-serif;font-size:12px} table{width:100%;border-collapse:collapse} th,td{border:1px solid #ddd;padding:8px;text-align:left} th{background-color:#f2f2f2} h1,p{margin-bottom:10px;}</style>');
+    printWindow.document.write('</head><body>');
+    printWindow.document.write('<h1>' + title + '</h1>');
+    printWindow.document.write('<p>' + subtitle + '</p>');
+    
+    const tableClone = table.cloneNode(true);
+    if (loggedUser.nivel.toLowerCase() === 'admin') {
+      Array.from(tableClone.rows).forEach(row => {
+        if(row.cells.length > 3) row.deleteCell(-1);
+      });
+    }
+    printWindow.document.write(tableClone.outerHTML);
+    printWindow.document.write('</body></html>');
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => { printWindow.print(); }, 500);
+}
+
+function openRotinaModal(data, tecnico, rowIndex) {
+    currentRotinaRowIndex = rowIndex;
+    showLoading();
+    google.script.run.withSuccessHandler(rotina => {
+        hideLoading();
+        if (!rotina) { alert('Não foi possível carregar os dados da rotina.'); return; }
+        document.getElementById('rotina-data').value = data;
+        document.getElementById('rotina-tecnico').value = tecnico;
+        document.getElementById('rotina-descricao').value = rotina[2]; 
+        document.getElementById('rotina-modal').style.display = 'block';
+    }).withFailureHandler(() => hideLoading()).getRotinaByRowIndex(rowIndex);
+}
+
+function salvarAtualizacaoRotina() {
+    const desc = document.getElementById('rotina-descricao').value;
+    showLoading();
+    google.script.run.withSuccessHandler(res => {
+        hideLoading();
+        if (res.status === 'sucesso') {
+            showMessage('rotina-modal-message', 'Salvo!', true);
+            aplicarFiltroRelatorioRotinas();
+            setTimeout(() => document.getElementById('rotina-modal').style.display = 'none', 1000);
+        } else {
+            showMessage('rotina-modal-message', 'Erro ao salvar', false);
+        }
+    }).withFailureHandler(() => hideLoading()).atualizarRotina(loggedUser.email, currentRotinaRowIndex, desc);
+}
+
+function excluirRotina() {
+    if (!confirm('Tem certeza que deseja excluir este registro?')) return;
+    showLoading();
+    google.script.run.withSuccessHandler(res => {
+        hideLoading();
+        if (res.status === 'sucesso') {
+            document.getElementById('rotina-modal').style.display = 'none';
+            aplicarFiltroRelatorioRotinas();
+        } else {
+            showMessage('rotina-modal-message', 'Erro ao excluir', false);
+        }
+    }).withFailureHandler(() => hideLoading()).excluirRotina(loggedUser.email, currentRotinaRowIndex);
+}
+
+
+/**
+ * -----------------------------------------------------------------
+ * MÓDULO 6: CONFIGURAÇÕES E LOGS
+ * -----------------------------------------------------------------
+ */
+function loadActionLogs() {
+    loadLogsControls();
+    aplicarFiltroLogs();
+}
+
+function loadLogsControls() {
+    const userSelect = document.getElementById('rel-logs-filter-user');
+    if (userSelect && userSelect.options.length > 1) return; 
+
+    const populate = (users) => {
+        const userEmailsAndNames = users.map(u => ({ email: u[0], name: u[1] }));
+        const opts = userEmailsAndNames.map(user => `<option value="${user.email}">${escapeHtml(user.name)} (${escapeHtml(user.email)})</option>`).join('');
+        if(userSelect) userSelect.innerHTML += opts;
+    };
+
+    if (adminUserListCache && adminUserListCache.length > 0) {
+        populate(adminUserListCache);
+    } else {
+        showLoading();
+        google.script.run.withSuccessHandler(users => {
+            hideLoading();
+            adminUserListCache = users;
+            populate(users);
+        }).withFailureHandler(() => hideLoading()).getAllUsers(loggedUser.email);
+    }
+}
+
+function aplicarFiltroLogs() {
+    const dateRange = logsReportDatePicker.getDateRange();
+    const filtros = {
+        dataInicio: dateRange.startDate,
+        dataFim: dateRange.endDate,
+        usuarioEmail: document.getElementById('rel-logs-filter-user')?.value || 'Todos'
+    };
+    const tbody = document.querySelector('#admin-logs-table tbody');
+    if(tbody) tbody.innerHTML = '<tr><td colspan="4">Carregando logs...</td></tr>';
+    showLoading();
+    google.script.run.withSuccessHandler(renderActionLogsTable).withFailureHandler(() => hideLoading()).getActionLogs(loggedUser.email, filtros);
+}
+
+function renderActionLogsTable(logs) {
+    hideLoading();
+    const tbody = document.querySelector('#admin-logs-table tbody');
+    if(!tbody) return;
+    let html = '';
+    if (logs && logs.length > 0) {
+        logs.forEach(log => {
+            html += `<tr><td>${log[0]}</td><td>${escapeHtml(log[1])}</td><td>${escapeHtml(log[2])}</td><td>${escapeHtml(log[3])}</td></tr>`;
+        });
+    } else {
+        html = '<tr><td colspan="4">Nenhum log encontrado para os filtros selecionados.</td></tr>';
+    }
+    tbody.innerHTML = html;
+}
+
+function imprimirRelatorioLogs() {
+    const table = document.getElementById('admin-logs-table');
+    const userSelect = document.getElementById('rel-logs-filter-user');
+    const userText = userSelect ? (userSelect.value === 'Todos' ? 'Todos' : userSelect.options[userSelect.selectedIndex].text) : 'Todos';
+    const dateRange = logsReportDatePicker.getDateRange();
+    let dateText;
+    if (dateRange.key === 'custom') {
+        const start = formatDateToDDMMYYYY(dateRange.startDate);
+        const end = formatDateToDDMMYYYY(dateRange.endDate);
+        dateText = (start && end) ? `${start} a ${end}` : 'Personalizado';
+    } else {
+        dateText = logsReportDatePicker.predefinedRanges[dateRange.key];
+    }
+
+    const title = `Relatório de Logs de Atividades`;
+    const subtitle = `Filtros: Usuário - ${userText} | Período - ${dateText}`;
+    
+    let printWindow = window.open('', '_blank');
+    printWindow.document.write('<html><head><title>' + title + '</title>');
+    printWindow.document.write('<style>body{font-family:Arial,sans-serif;font-size:12px} table{width:100%;border-collapse:collapse} th,td{border:1px solid #ddd;padding:8px;text-align:left} th{background-color:#f2f2f2} h1,p{margin-bottom:10px;}</style>');
+    printWindow.document.write('</head><body>');
+    printWindow.document.write('<h1>' + title + '</h1>');
+    printWindow.document.write('<p>' + subtitle + '</p>');
+    printWindow.document.write(table.outerHTML);
+    printWindow.document.write('</body></html>');
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => { printWindow.print(); }, 500);
+}
+
+function loadAdminUsersTable() {
+    const tbody = document.querySelector('#admin-users-table tbody');
+    if(!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="4">Carregando...</td></tr>';
+    showLoading();
+    google.script.run.withSuccessHandler(users => {
+        hideLoading();
+        adminUserListCache = users;
+        let html = '';
+        if (users && users.length > 0) {
+            users.forEach(user => {
+                html += `<tr><td>${escapeHtml(user[0])}</td><td>${escapeHtml(user[1])}</td><td>${escapeHtml(user[2])}</td><td><button class="btn btn-secondary" onclick="openUserModal('${user[0]}')">Editar</button></td></tr>`;
+            });
+        } else {
+            html = '<tr><td colspan="4">Nenhum usuário encontrado.</td></tr>';
+        }
+        tbody.innerHTML = html;
+    }).withFailureHandler(() => hideLoading()).getAllUsers(loggedUser.email);
+}
+
+function saveUser() {
+    const email = document.getElementById('user-email').value;
+    const nome = document.getElementById('user-nome').value;
+    const nivel = document.getElementById('user-nivel').value;
+    const senha = document.getElementById('user-senha').value;
+
+    if (!email || !nome) { showMessage('user-modal-message', 'Email e Nome são obrigatórios.', false); return; }
+
+    const userData = { email, nome, nivel, senha };
+    showLoading();
+    google.script.run.withSuccessHandler(res => {
+        hideLoading();
+        if (res.status === 'sucesso') {
+            showMessage('user-modal-message', res.message, true);
+            loadAdminUsersTable();
+            setTimeout(() => document.getElementById('user-admin-modal').style.display = 'none', 1000);
+        } else {
+            showMessage('user-modal-message', res.message, false);
+        }
+    }).withFailureHandler(() => hideLoading()).saveUser(loggedUser.email, userData);
+}
+
+function deleteUser() {
+    const email = document.getElementById('user-email').value;
+    if (!email || !confirm(`Tem certeza que deseja excluir o usuário ${email}?`)) return;
+    
+    showLoading();
+    google.script.run.withSuccessHandler(res => {
+        hideLoading();
+        if (res.status === 'sucesso') {
+            document.getElementById('user-admin-modal').style.display = 'none';
+            loadAdminUsersTable();
+        } else {
+            showMessage('user-modal-message', res.message, false);
+        }
+    }).withFailureHandler(() => hideLoading()).deleteUser(loggedUser.email, email);
+}
+
+function openUserModal(email) {
+    const modal = document.getElementById('user-admin-modal');
+    const title = document.getElementById('user-modal-title');
+    const emailEl = document.getElementById('user-email');
+    const nomeEl = document.getElementById('user-nome');
+    const nivelEl = document.getElementById('user-nivel');
+    const senhaEl = document.getElementById('user-senha');
+    const deleteBtn = document.getElementById('user-modal-delete-btn');
+
+    emailEl.value = ''; nomeEl.value = ''; nivelEl.value = 'Solicitante'; senhaEl.value = '';
+    senhaEl.placeholder = 'Deixe em branco para não alterar';
+    showMessage('user-modal-message', '', true);
+
+    if (email) { 
+        const user = adminUserListCache.find(u => u[0] === email);
+        if (user) {
+            title.textContent = 'Editar Utilizador';
+            emailEl.value = user[0]; emailEl.disabled = true;
+            nomeEl.value = user[1]; nivelEl.value = user[2];
+            deleteBtn.style.display = 'block';
+        }
+    } else { 
+        title.textContent = 'Novo Utilizador';
+        emailEl.disabled = false;
+        senhaEl.placeholder = 'Senha é obrigatória para novo usuário';
+        deleteBtn.style.display = 'none';
+    }
+    if(modal) modal.style.display = 'block';
+}
+
+function loadMessageSender() {
+    const userSelect = document.getElementById('msg-recipient-user');
+    if (userSelect && userSelect.options.length > 1) return; 
+
+    const populate = (users) => {
+        const opts = users
+            .filter(user => user[0].toLowerCase() !== loggedUser.email.toLowerCase()) 
+            .map(user => `<option value="${user[0]}">${escapeHtml(user[1])} (${escapeHtml(user[0])})</option>`)
+            .join('');
+        if(userSelect) userSelect.innerHTML = `<option value="">-- Selecione um Destinatário --</option>${opts}`;
+    };
+
+    if (adminUserListCache && adminUserListCache.length > 0) {
+        populate(adminUserListCache);
+    } else {
+        showLoading();
+        google.script.run.withSuccessHandler(users => {
+            hideLoading();
+            adminUserListCache = users; 
+            populate(users);
+        }).withFailureHandler(() => hideLoading()).getAllUsers(loggedUser.email);
+    }
+}
+
+function sendMessage() {
+    const recipient = document.getElementById('msg-recipient-user').value;
+    const content = document.getElementById('msg-content').value;
+    if (!recipient || !content) {
+        showMessage('msg-send-message', 'Selecione um destinatário e escreva uma mensagem.', false);
+        return;
+    }
+    showLoading();
+    google.script.run.withSuccessHandler(res => {
+        hideLoading();
+        showMessage('msg-send-message', res.message, res.status === 'sucesso');
+        if (res.status === 'sucesso') {
+            document.getElementById('msg-content').value = '';
+        }
+    }).withFailureHandler(() => hideLoading()).sendMessageToUser(loggedUser.email, recipient, content);
+}
+
+function submitChangePassword() {
+    const oldPass = document.getElementById('cp-old-password').value;
+    const newPass = document.getElementById('cp-new-password').value;
+    if (!oldPass || !newPass) {
+        showMessage('change-password-message', 'Preencha todos os campos.', false);
+        return;
+    }
+    showLoading();
+    google.script.run.withSuccessHandler(res => {
+        hideLoading();
+        showMessage('change-password-message', res.message, res.status === 'sucesso');
+        if (res.status === 'sucesso') {
+            document.getElementById('cp-old-password').value = '';
+            document.getElementById('cp-new-password').value = '';
+        }
+    }).withFailureHandler(() => hideLoading()).changeUserPassword(loggedUser.email, oldPass, newPass);
+}
+
+function loadMyMessages() {
+  const container = document.getElementById('my-messages-container');
+  if(!container) return;
+  container.innerHTML = '<p>Carregando mensagens...</p>';
+  showLoading();
+  google.script.run.withSuccessHandler(messages => {
+    hideLoading();
+    if (!messages || messages.length === 0) {
+      container.innerHTML = '<p class="no-messages">Nenhuma mensagem recebida.</p>';
+      return;
+    }
+    let html = '<ul>';
+    messages.forEach(msg => {
+      html += `<li onclick="viewMessageDetail('${msg[0]}', '${escapeHtml(msg[1])}', ${msg[3]})"><strong>De: ${escapeHtml(msg[1])}</strong> (${msg[0]})<br/>${escapeHtml(msg[2].substring(0, 100))}...</li>`;
+    });
+    html += '</ul>';
+    container.innerHTML = html;
+  }).withFailureHandler(() => hideLoading()).getMessagesForUser(loggedUser.email);
+}
+
+function viewMessageDetail(date, from, rowIndex) {
+    alert("Visualização detalhada em desenvolvimento.");
+}
+
+function savePopUpConfig() {
+    const config = {
+        habilitado: document.getElementById('popup-habilitado').value,
+        mensagem: document.getElementById('popup-mensagem').value,
+        imageUrl: document.getElementById('popup-image-url').value
+    };
+    showMessage('popup-config-message', 'Salvando...', true);
+    showLoading();
+    google.script.run.withSuccessHandler(response => {
+        hideLoading();
+        if (response.status === 'sucesso') {
+            showMessage('popup-config-message', 'Configuração salva com sucesso!', true);
+        } else {
+            showMessage('popup-config-message', 'Falha ao salvar: ' + (response.message || 'Erro desconhecido'), false);
+        }
+    }).withFailureHandler(() => hideLoading()).saveConfiguracaoPopUp(loggedUser.email, config);
+}
+
+
+/**
+ * -----------------------------------------------------------------
+ * MÓDULO 7: CHAT GLOBAL
+ * -----------------------------------------------------------------
+ */
+function sendChatMessage() {
+    const input = document.getElementById('chat-input-text');
+    if(!input) return;
+    const msg = input.value.trim();
+    
+    if (msg === "" && chatAttachments.length === 0) return;
+
+    input.value = '';
+    
+    google.script.run
+        .withSuccessHandler(() => {
+            chatAttachments = [];
+            renderChatAttachmentsPreview();
+            cancelReply();
+        })
+        .withFailureHandler(err => {
+            input.value = msg; 
+            alert('Falha ao enviar mensagem: ' + JSON.stringify(err));
+        })
+        .sendChatMessageAdvanced(loggedUser.email, 'global', msg, chatAttachments, chatReplyContext);
+}
+
+function loadGlobalChatHistory(forceOpen = false, playSound = true) {
+    if (!loggedUser) return;
+    google.script.run.withSuccessHandler(messages => {
+        cachedChatMessages = messages;
+        const newestMsg = findNewestMessage(messages);
+        
+        if (newestMsg && newestMsg.id > lastChatMessageId) {
+            lastChatMessageId = newestMsg.id;
+            if (isChatWindowOpen) {
+                renderChatDOM(messages, false);
+            } else if (!newestMsg.isMe) {
+                const badge = document.getElementById('chat-unread-badge');
+                if(badge) badge.style.display = 'block';
+                if(playSound) playNotificationSound();
+            }
+        }
+        if (forceOpen) renderChatDOM(messages, true);
+    }).getGlobalChatHistory(loggedUser.email);
+}
+
+function renderChatDOM(messages, fullRender = false) {
+    const container = document.getElementById('chat-history-container');
+    if(!container) return;
+    if (fullRender) container.innerHTML = '';
+    
+    const fragment = document.createDocumentFragment();
+    messages.forEach(msg => {
+        if (document.getElementById(`msg-${msg.id}`)) return; 
+        fragment.appendChild(createMessageElement(msg));
+    });
+
+    const shouldScroll = (container.scrollTop + container.clientHeight) >= (container.scrollHeight - 100);
+    container.appendChild(fragment);
+
+    if (shouldScroll || fullRender) {
+        container.scrollTop = container.scrollHeight;
+    }
+}
+
+function createMessageElement(msg) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'chat-message-wrapper';
+    wrapper.id = `msg-${msg.id}`;
+
+    const bubble = document.createElement('div');
+    bubble.className = `msg-bubble ${msg.isMe ? 'msg-sent' : 'msg-received'}`;
+
+    if (!msg.isMe) {
+        const sender = document.createElement('div');
+        sender.className = 'msg-sender';
+        sender.textContent = msg.fromName;
+        bubble.appendChild(sender);
+    }
+    
+    if (msg.replyTo) {
+        const quote = document.createElement('div');
+        quote.className = 'msg-reply-quote';
+        quote.innerHTML = `<strong>${escapeHtml(msg.replyTo.fromName)}:</strong> <em>${escapeHtml(msg.replyTo.message)}</em>`;
+        bubble.appendChild(quote);
+    }
+
+    if (msg.message) {
+        const text = document.createElement('div');
+        text.innerHTML = formatChatMessage(msg.message);
+        bubble.appendChild(text);
+    }
+    
+    if (msg.image) {
+        const attachmentsContainer = document.createElement('div');
+        attachmentsContainer.className = 'chat-attachments-container';
+        const urls = msg.image.split('\n');
+        urls.forEach(url => {
+            if (url.trim()) {
+                const isImg = /\.(jpg|jpeg|png|gif)$/i.test(url);
+                const attachEl = document.createElement('div');
+                attachEl.className = `chat-attachment ${isImg ? 'chat-attachment--image' : 'chat-attachment--file'}`;
+                const link = document.createElement('a');
+                link.href = url;
+                link.target = '_blank';
+
+                if (isImg) {
+                    const img = document.createElement('img');
+                    img.src = url.replace('/view', '/thumbnail');
+                    link.appendChild(img);
+                } else {
+                    link.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79 4-4 4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg><span>${getFileNameFromUrl(url)}</span>`;
+                }
+                attachEl.appendChild(link);
+                attachmentsContainer.appendChild(attachEl);
+            }
+        });
+        bubble.appendChild(attachmentsContainer);
+    }
+
+    const time = document.createElement('span');
+    time.className = 'msg-time';
+    time.textContent = msg.timestamp;
+    bubble.appendChild(time);
+    
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+    actions.innerHTML = `<span class="msg-reply-btn" title="Responder" onclick="setReplyContext(${msg.id}, '${escapeHtml(msg.fromName)}', '${escapeHtml(msg.message.substring(0,50))}')">↪</span>`;
+    bubble.appendChild(actions);
+
+    wrapper.appendChild(bubble);
+    
+    if (msg.replies && msg.replies.length > 0) {
+        const threadDiv = document.createElement('div');
+        threadDiv.className = 'chat-thread';
+        msg.replies.forEach(reply => {
+            threadDiv.appendChild(createMessageElement(reply));
+        });
+        wrapper.appendChild(threadDiv);
+    }
+    
+    return wrapper;
+}
+
+function findNewestMessage(messages) {
+    let newest = null;
+    function traverse(msgs) {
+        for (const msg of msgs) {
+            if (!newest || msg.id > newest.id) {
+                newest = msg;
+            }
+            if (msg.replies && msg.replies.length > 0) {
+                traverse(msg.replies);
+            }
+        }
+    }
+    traverse(messages);
+    return newest;
+}
+
+function formatChatMessage(text) {
+    text = escapeHtml(text).replace(/@(\w+)/g, (match, username) => {
+        if (loggedUser && username.toLowerCase() === loggedUser.nome.toLowerCase()) {
+            return `<span class="mention-me">${match}</span>`;
+        }
+        return `<span class="mention-other">${match}</span>`;
+    });
+    text = text.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank">$1</a>');
+    return text;
+}
+
+function setReplyContext(id, fromName, message) {
+    chatReplyContext = { id, fromName, message: message.replace(/'/g, "\\'") };
+    const previewContainer = document.getElementById('chat-reply-preview-container');
+    if(previewContainer) {
+        previewContainer.innerHTML = `
+          <div class="chat-reply-preview">
+            <div class="chat-reply-preview-close" onclick="cancelReply()">&times;</div>
+            <div class="chat-reply-preview-header">Respondendo a ${escapeHtml(fromName)}</div>
+            <div class="chat-reply-preview-text">${escapeHtml(message)}</div>
+          </div>
+        `;
+    }
+    const input = document.getElementById('chat-input-text');
+    if(input) input.focus();
+}
+
+function cancelReply() {
+    chatReplyContext = null;
+    const previewContainer = document.getElementById('chat-reply-preview-container');
+    if(previewContainer) previewContainer.innerHTML = '';
+}
+
+function getFileNameFromUrl(url) {
+    try {
+        const decodedUrl = decodeURIComponent(url);
+        return decodedUrl.substring(decodedUrl.lastIndexOf('/') + 1);
+    } catch (e) { return "Arquivo"; }
+}
+
+
+/**
+ * -----------------------------------------------------------------
+ * MÓDULO 8: POLLING, ALERTAS E ÁUDIO
+ * -----------------------------------------------------------------
+ */
+function startPollingServices() {
+    if (!chatPollingInterval) {
+        chatPollingInterval = setInterval(() => loadGlobalChatHistory(false, true), FAST_INTERVAL);
+    }
+    if (!overdueCheckInterval && loggedUser.nivel.toLowerCase() === 'admin') {
+        overdueCheckInterval = setInterval(checkForOverdueOS, 300000); 
+        checkForOverdueOS();
+    }
+    if (!privateMsgCheckInterval) {
+        privateMsgCheckInterval = setInterval(checkForPrivateMessages, SLOW_INTERVAL);
+        checkForPrivateMessages();
+    }
+    if (loggedUser.nivel.toLowerCase() === 'tecnico') {
+        if (!assignmentCheckInterval) {
+            assignmentCheckInterval = setInterval(checkForNewAssignment, FAST_INTERVAL);
+            checkForNewAssignment(); 
+        }
+    }
+}
+
+function stopAllPollingServices() {
+    if (osCheckInterval) clearInterval(osCheckInterval);
+    if (updateCheckInterval) clearInterval(updateCheckInterval);
+    if (chatPollingInterval) clearInterval(chatPollingInterval);
+    if (highPriorityInterval) clearInterval(highPriorityInterval);
+    if (overdueCheckInterval) clearInterval(overdueCheckInterval);
+    if (privateMsgCheckInterval) clearInterval(privateMsgCheckInterval);
+    if (assignmentCheckInterval) clearInterval(assignmentCheckInterval);
+    osCheckInterval = updateCheckInterval = chatPollingInterval = highPriorityInterval = overdueCheckInterval = privateMsgCheckInterval = assignmentCheckInterval = null;
+}
+
+function stopAllAudioLoops(){
+    if (audioLoopInterval) clearInterval(audioLoopInterval);
+    if (remoteAudioLoopInterval) clearInterval(remoteAudioLoopInterval);
+    if (chatAudioLoopInterval) clearInterval(chatAudioLoopInterval);
+    if (highPriorityAudioLoop) clearInterval(highPriorityAudioLoop);
+    if (overdueAudioLoopInterval) clearInterval(overdueAudioLoopInterval);
+    if (privateMsgAudioLoop) clearInterval(privateMsgAudioLoop);
+    if (assignmentAudioLoopInterval) clearInterval(assignmentAudioLoopInterval);
+    audioLoopInterval = remoteAudioLoopInterval = chatAudioLoopInterval = highPriorityAudioLoop = overdueAudioLoopInterval = privateMsgAudioLoop = assignmentAudioLoopInterval = null;
+}
+
+function stopChatAlarm() {
+    const badge = document.getElementById('chat-unread-badge');
+    if(badge) badge.style.display = 'none';
+    if (chatAudioLoopInterval) {
+        clearInterval(chatAudioLoopInterval);
+        chatAudioLoopInterval = null;
+    }
+}
+
+function stopRemoteAudioLoop(){
+    if (remoteAudioLoopInterval) {
+        clearInterval(remoteAudioLoopInterval);
+        remoteAudioLoopInterval = null;
+        remoteAssignmentAlarm = false;
+        STORAGE_API.removeItem(REMOTE_ALARM_KEY);
+    }
+}
+
+function checkForOverdueOS() {
+    if (!loggedUser || loggedUser.nivel.toLowerCase() !== 'admin') return;
+    google.script.run
+        .withSuccessHandler(handleOverdueOSCheck)
+        .withFailureHandler(err => console.error("Falha ao verificar O.S. em atraso:", err))
+        .getOverdueOS();
+}
+
+function handleOverdueOSCheck(overdueIds) {
+    const ids = overdueIds || [];
+    if (ids.length === 0) {
+        if (alarmingOverdueOSIds.length > 0) stopOverdueAlarm(true);
+        return;
+    }
+    const hasNewOverdue = ids.some(id => !alarmingOverdueOSIds.includes(id));
+    const listHasChanged = hasNewOverdue || ids.length !== alarmingOverdueOSIds.length;
+
+    if (listHasChanged) {
+        alarmingOverdueOSIds = ids;
+        startOverdueAlarm();
+    }
+}
+
+function startOverdueAlarm() {
+    const header = document.querySelector('header');
+    if(header) header.classList.add('overdue-alert');
+    const message = `<strong>ALERTA:</strong> Existem ${alarmingOverdueOSIds.length} O.S. abertas/pendentes há mais de 7 dias!`;
+    showToast(message, [{ label: 'Ver Painel', callback: () => openTab('painel-os') }], 'toast-overdue');
+
+    if (!overdueAudioLoopInterval) {
+        playWarningBeep();
+        overdueAudioLoopInterval = setInterval(playWarningBeep, AUDIO_INTERVAL);
+    }
+    const painelOS = document.getElementById('painel-os');
+    if (painelOS && painelOS.classList.contains('active')) aplicarFiltroPainel();
+}
+
+function stopOverdueAlarm(fullReset = false) {
+    const header = document.querySelector('header');
+    if(header) header.classList.remove('overdue-alert');
+    if (overdueAudioLoopInterval) {
+        clearInterval(overdueAudioLoopInterval);
+        overdueAudioLoopInterval = null;
+    }
+    if (fullReset) alarmingOverdueOSIds = [];
+}
+
+function checkForNewAssignment() {
+    if (!loggedUser || loggedUser.nivel.toLowerCase() !== 'tecnico') return;
+    const lastCheckedId = STORAGE_API.getItem(ASSIGNED_OS_ID_KEY) || '0';
+    google.script.run
+        .withSuccessHandler(handleNewAssignment)
+        .checkForAssignedOS(loggedUser.nome, lastCheckedId);
+}
+
+function handleNewAssignment(assignedOS) {
+    if (!loggedUser || loggedUser.nivel.toLowerCase() !== 'tecnico') return;
+    if (assignedOS && assignedOS.id) {
+        const message = `<strong>Nova O.S. #${assignedOS.id} atribuída!</strong><br><small>De: ${escapeHtml(assignedOS.solicitante)} (${escapeHtml(assignedOS.setor)})</small>`;
+        showToast(message, [{ label: 'Ver Painel', callback: () => openTab('painel-os') }], 'toast-assigned');
+        startAssignmentAlarm();
+        STORAGE_API.setItem(ASSIGNED_OS_ID_KEY, assignedOS.id);
+    }
+}
+
+function startAssignmentAlarm() {
+    if (!assignmentAudioLoopInterval) {
+        playNotificationSound();
+        assignmentAudioLoopInterval = setInterval(playNotificationSound, AUDIO_INTERVAL);
+    }
+}
+
+function stopAssignmentAlarm() {
+    if (assignmentAudioLoopInterval) {
+        clearInterval(assignmentAudioLoopInterval);
+        assignmentAudioLoopInterval = null;
+    }
+}
+
+function checkForPrivateMessages() {
+    if (!loggedUser) return;
+    google.script.run
+        .withSuccessHandler(hasUnread => {
+            const bell = document.getElementById('private-message-bell');
+            if (hasUnread && bell) {
+                bell.style.display = 'flex';
+                if (!privateMsgAudioLoop) {
+                   bell.classList.add('active');
+                   playNotificationSound(); 
+                   privateMsgAudioLoop = setInterval(playNotificationSound, AUDIO_INTERVAL);
+                }
+            } else {
+                stopPrivateMessageAlarm();
+            }
+        })
+        .checkForUnreadMessages(loggedUser.email);
+}
+
+function stopPrivateMessageAlarm() {
+    const bell = document.getElementById('private-message-bell');
+    if(bell) {
+        bell.classList.remove('active');
+        bell.style.display = 'none';
+    }
+    if (privateMsgAudioLoop) {
+        clearInterval(privateMsgAudioLoop);
+        privateMsgAudioLoop = null;
+    }
+}
+
+function playWarningBeep() {
+    if (!audioCtx) return;
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    oscillator.type = 'triangle';
+    oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
+    gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.5);
+    oscillator.start(audioCtx.currentTime);
+    oscillator.stop(audioCtx.currentTime + 0.5);
+}
+
+function playNotificationSound() {
+    if (!audioCtx) return;
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    oscillator.type = 'sine';
+    gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+    oscillator.frequency.setValueAtTime(1000, audioCtx.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(1500, audioCtx.currentTime + 0.05);
+    gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.2);
+    oscillator.start(audioCtx.currentTime);
+    oscillator.stop(audioCtx.currentTime + 0.2);
+}
+
+/**
+ * -----------------------------------------------------------------
+ * MÓDULO 9: UTILITÁRIOS DE ARQUIVOS E OUTROS
+ * -----------------------------------------------------------------
+ */
+function handleFileChange(event, displayId = 'anexo-filename-display') {
+    const files = event.target.files;
+    const dispEl = document.getElementById(displayId);
+    if (!files || files.length === 0) {
+        filesToUpload = [];
+        if(dispEl) dispEl.textContent = '';
+        return;
+    }
+    
+    if (files.length > 6) {
+        alert("Você pode anexar no máximo 6 arquivos.");
+        event.target.value = '';
+        return;
+    }
+
+    filesToUpload = [];
+    let fileNames = [];
+    Array.from(files).forEach(file => {
+        fileNames.push(file.name);
+        fileToBase64(file).then(base64String => {
+            filesToUpload.push({ base64: base64String, name: file.name });
+        });
+    });
+    if(dispEl) dispEl.textContent = fileNames.join(', ');
+}
+
+function handleDiarioFileChange(e) {
+  handleFileChange(e, 'diario-anexo-filename-display');
+}
+
+function handleModalFileChange(event) {
+    const files = event.target.files;
+    if (!files) return;
+    modalFilesToUpload = [];
+    let fileNames = [];
+    Array.from(files).forEach(file => {
+        fileNames.push(file.name);
+        fileToBase64(file).then(base64String => {
+            modalFilesToUpload.push({ base64: base64String, name: file.name });
+        });
+    });
+    const mFn = document.getElementById('modal-anexo-filename');
+    if(mFn) mFn.textContent = fileNames.join(', ');
+}
+
+function handleChatAttachFiles(event) {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+    Array.from(files).forEach(file => {
+        fileToBase64(file).then(base64String => {
+            chatAttachments.push({ base64: base64String, name: file.name, isImage: file.type.startsWith('image/') });
+            renderChatAttachmentsPreview();
+        });
+    });
+}
+
+function renderChatAttachmentsPreview() {
+    const container = document.getElementById('chat-attachments-preview');
+    if (!container) return;
+    container.innerHTML = '';
+    if (chatAttachments.length === 0) return;
+    
+    const list = document.createElement('div');
+    list.className = 'chat-attachments-list';
+    chatAttachments.forEach((att, idx) => {
+        const item = document.createElement('div');
+        item.className = 'chat-attachment-item';
+        item.innerHTML = `<span>${escapeHtml(att.name)}</span> <span class="chat-attachment-remove" onclick="chatAttachments.splice(${idx}, 1); renderChatAttachmentsPreview();">&times;</span>`;
+        list.appendChild(item);
+    });
+    container.appendChild(list);
+}
+
+function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = error => reject(error);
+    });
+}
+
+function closeImageModal(event) {
+    if(event) event.stopPropagation();
+    const modal = document.getElementById('image-viewer-modal');
+    if(modal) modal.style.display = 'none';
+    const src = document.getElementById('modal-image-viewer-src');
+    if(src) src.src = ''; 
+}
+
+function showImageModal(imageUrl) {
+    const modal = document.getElementById('image-viewer-modal');
+    const img = document.getElementById('modal-image-viewer-src');
+    if(!modal || !img) return;
+    const finalUrl = imageUrl.includes('drive.google.com') ? imageUrl.replace('/view', '/uc') : imageUrl;
+    img.src = finalUrl;
+    modal.style.display = 'flex';
+}
+
+function setupDatePickers() {
+    if(typeof DateRangePicker !== 'undefined') {
+        statsDatePicker = new DateRangePicker('stats-date-range', 'last7days', loadStatistics);
+        osReportDatePicker = new DateRangePicker('rel-os-date-range', 'thismonth', aplicarFiltroRelatorio);
+        logsReportDatePicker = new DateRangePicker('rel-logs-date-range', 'last7days', aplicarFiltroLogs);
+        diarioDatePicker = new DateRangePicker('diario-date-range', 'last7days', aplicarFiltroDiario);
+        rotinasReportDatePicker = new DateRangePicker('rel-rotinas-date-range', 'last7days', aplicarFiltroRelatorioRotinas);
+    }
+}
+
+
+/**
+ * -----------------------------------------------------------------
+ * MÓDULO 10: LISTENERS DE MODAL E UTILIDADES DO SISTEMA (WAKELOCK, POPUP, DRAG)
+ * -----------------------------------------------------------------
+ */
+
+// Fecha as Modais clicando no X ou fora da tela
+function setupAllModalListeners() {
+    const closeButtons = document.querySelectorAll('.close');
+    
+    closeButtons.forEach(btn => {
+        btn.addEventListener('click', function() {
+            const modal = this.closest('.modal');
+            if (modal) {
+                modal.style.display = 'none';
+            }
+        });
+    });
+
+    window.addEventListener('click', function(event) {
+        if (event.target.classList.contains('modal')) {
+            event.target.style.display = 'none';
+        }
+    });
+}
+
+// Listeners que abrem as URLs especificadas numa nova aba
+function setupProgramasModalListeners() {
+    const assignLink = (id, url) => {
+        const btn = document.getElementById(id);
+        if (btn) btn.addEventListener('click', () => window.open(url, '_blank'));
+    };
+
+    assignLink('btn-requisicao-material', 'https://sites.google.com/view/requisicaooscarinn/in%C3%ADcio');
+    assignLink('btn-pedido-compra', 'https://sites.google.com/view/pedidodecompra/in%C3%ADcio');
+    assignLink('btn-indicadores-estatisticas', 'https://sites.google.com/view/oscarinn-ios/in%C3%ADcio');
+    assignLink('btn-demonstrativos-despesas', 'https://sites.google.com/view/ddmanutencao/in%C3%ADcio');
+    assignLink('btn-avaliacao-desempenho', 'https://sites.google.com/view/rhmanager/in%C3%ADcio');
+}
+
+// ADICIONADO: Função que abre o modal de Programas
+function openProgramasModal() {
+    const modal = document.getElementById('programas-modal');
+    if (modal) {
+        modal.style.display = 'block';
+    }
+}
+
+// Abre/Fecha a janela flutuante do Chat
+function toggleChatWindow() {
+    const chatWin = document.getElementById('chat-floating-window');
+    if (!chatWin) return;
+    
+    isChatWindowOpen = !isChatWindowOpen;
+    
+    if (isChatWindowOpen) {
+        chatWin.style.display = 'flex';
+        const badge = document.getElementById('chat-unread-badge');
+        if (badge) badge.style.display = 'none';
+        renderChatDOM(cachedChatMessages, true);
+    } else {
+        chatWin.style.display = 'none';
+    }
+}
+
+// Permite arrastar a janela de chat pela tela
+function setupChatWindowDrag() {
+    const chatWin = document.getElementById('chat-floating-window');
+    const chatHeader = document.querySelector('.chat-header');
+    if (!chatWin || !chatHeader) return;
+    
+    let isDragging = false;
+    let currentX, currentY, initialX, initialY;
+    let xOffset = 0, yOffset = 0;
+
+    chatHeader.addEventListener('mousedown', dragStart);
+    document.addEventListener('mousemove', drag);
+    document.addEventListener('mouseup', dragEnd);
+
+    function dragStart(e) {
+        initialX = e.clientX - xOffset;
+        initialY = e.clientY - yOffset;
+        if (e.target === chatHeader || chatHeader.contains(e.target)) {
+            isDragging = true;
+        }
+    }
+
+    function drag(e) {
+        if (isDragging) {
+            e.preventDefault();
+            currentX = e.clientX - initialX;
+            currentY = e.clientY - initialY;
+            xOffset = currentX;
+            yOffset = currentY;
+            chatWin.style.transform = `translate(${currentX}px, ${currentY}px)`;
+        }
+    }
+
+    function dragEnd(e) {
+        initialX = currentX;
+        initialY = currentY;
+        isDragging = false;
+    }
+}
+
+// Pop-Up de Login Admin
+function loadPopUpOnLoginScreen() {
+    if (typeof google === 'undefined' || !google.script) return;
+    google.script.run.withSuccessHandler(config => {
+        if (config && config.habilitado === 'TRUE') {
+            const modal = document.getElementById('popup-modal');
+            const msgEl = document.getElementById('popup-modal-message');
+            const imgEl = document.getElementById('popup-modal-image');
+            
+            if (modal && msgEl) {
+                msgEl.innerHTML = config.mensagem.replace(/\n/g, '<br>');
+                if (config.imageUrl && imgEl) {
+                    imgEl.src = config.imageUrl;
+                    imgEl.style.display = 'block';
+                } else if (imgEl) {
+                    imgEl.style.display = 'none';
+                }
+                modal.style.display = 'block';
+            }
+        }
+    }).getConfiguracaoPopUp();
+}
+
+// WakeLock API (Impede a tela do celular de apagar)
+async function requestWakeLock() {
+    try {
+        if ('wakeLock' in navigator) {
+            wakeLock = await navigator.wakeLock.request('screen');
+        }
+    } catch (err) {
+        console.warn(`${err.name}, ${err.message}`);
+    }
+}
+
+function releaseWakeLock() {
+    if (wakeLock !== null) {
+        wakeLock.release().then(() => wakeLock = null);
+    }
+}
+
+function handleWakeLockVisibility() {
+    if (document.visibilityState === 'visible' && loggedUser) {
+        requestWakeLock();
+    }
+}
 </script>
