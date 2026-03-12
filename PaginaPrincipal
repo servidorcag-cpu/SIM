@@ -1,27 +1,23 @@
+
 <!DOCTYPE html>
 <html>
 <head>
   <base target="_top">
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>S.I.M - Sistema Interno de Manutenção</title>
   <!-- Carrega a biblioteca de Gráficos do Google -->
   <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
   
-  <!-- Inclui o CSS estilizado -->
-  <?!= include('CSS'); ?>
+  <!-- Fontes -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;700&display=swap" rel="stylesheet">
   
-  <style>
-    /* Estilos específicos para a tela de login que podem não estar no CSS global */
-    .login-header { text-align: center; margin-bottom: 20px; }
-    .login-header h2 { font-size: 30px; color: #3f51b5; margin-bottom: 10px; }
-    .login-header p.subtitle { font-size: 16px; color: #555; margin-top: -5px; margin-bottom: 0; }
-    .logo-img { display: block; margin: 0 auto 10px auto; width: 100px; height: 100px; border-radius: 50%; object-fit: cover; }
-    /* Preview area for multiple attachments */
-    .chat-attachments-list { display:flex; gap:8px; align-items:center; flex-wrap:wrap; max-width:180px; }
-    .chat-attachment-item { background:#fff; border:1px solid #ddd; padding:6px 8px; border-radius:6px; font-size:12px; display:flex; gap:6px; align-items:center; }
-    .chat-attachment-remove { cursor:pointer; color:#c62828; font-weight:bold; }
-  </style>
+  <?!= HtmlService.createHtmlOutputFromFile('css').getContent(); ?>
 </head>
 <body>
+  <div id="loading-indicator"></div>
 
   <!-- =========================================
        1. TELA DE LOGIN
@@ -29,10 +25,9 @@
   <div id="login-container" class="center-container">
     <div class="card login-card">
       <div class="login-header">
-        <!-- Logo do Sistema (Substituível) -->
-        <img src="https://www.oscarinn.com.br/wp-content/themes/criaturo-oscarinn/assets/images/Logo.svg">
-        <h2>S.I.M</h2>
-        <p class="subtitle">Sistema Interno de Manutenção</p> 
+        <img src="https://i.postimg.cc/xkn8bR6p/SIM-Manager.png" alt="Logo do S.I.M" class="sim-logo">
+        <h2 style="display: none;">S.I.M</h2>
+        <p class="subtitle" style="display: none;">Sistema Interno de Manutenção</p> 
       </div>
       
       <p id="login-message" class="message"></p>
@@ -48,7 +43,7 @@
       
       <button class="btn btn-primary btn-full" onclick="handleLogin()">Entrar</button>
     </div>
-    <div class="app-footer"><span class="app-version">Versão 1.26 Developed by Clodoaldo A. Garcia </span></div>
+    <div class="app-footer"><span class="app-version">Versão 2.20 Developed by Clodoaldo A. Garcia </span></div>
   </div>
 
   <!-- =========================================
@@ -59,45 +54,74 @@
     <!-- Cabeçalho Superior -->
     <header>
       <div class="header-content">
-        <h1>Sistema de O.S.</h1>
+        <div class="header-title">
+          <svg class="header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" role="img" aria-hidden="true">
+            <title>Ícone de engrenagem</title>
+            <path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61-.25-1.17-.59-1.69-.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49-.12-.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19-.15-.24-.42-.12-.64l2 3.46c.12.22.39.3.61-.22l2.49-1c.52.4 1.08.73 1.69-.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49.42l.38 2.65c.61-.25 1.17-.59-1.69-.98l2.49 1c.23.09.49 0 .61.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/>
+          </svg>
+          <h1>S.I.M Manager</h1>
+        </div>
         <div class="user-info">
           <span id="user-display">Usuário</span>
+          <button id="private-message-bell" class="notification-bell" onclick="openTab('minha-conta')" style="display: none;" title="Novas mensagens privadas" aria-label="Novas mensagens privadas">
+            <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2zm-2 1H8v-6c0-2.48 1.51-4.5 4-4.5s4 2.02 4 4.5v6z"/></svg>
+            <div class="notification-badge"></div>
+          </button>
           <button class="btn btn-secondary" onclick="logout()">Sair</button>
         </div>
       </div>
     </header>
 
-    <!-- Navegação e Abas -->
-    <div class="tabs-container">
-      <nav class="tabs">
-        <button class="tab-button active" data-tab="gerar-os">Gerar O.S.</button>
-        <button class="tab-button" data-tab="painel-os" id="tab-painel-os">Painel de O.S.</button>
-        <button class="tab-button" data-tab="diario-tecnico" id="tab-diario-tecnico">Diário do Técnico</button>
-        <button class="tab-button" data-tab="consulta-rotinas" id="tab-consulta-rotinas">Consulta de Rotinas</button>
-        <button class="tab-button" data-tab="relatorios" id="tab-relatorios">Relatórios</button>
-        <button class="tab-button" data-tab="configuracoes" id="tab-configuracoes">Configurações</button> 
-        <button class="tab-button" data-tab="minha-conta" id="tab-minha-conta">Minha Conta</button> 
+    <!-- Conteúdo Principal -->
+    <main class="tabs-container">
+      <nav class="tabs" role="tablist" aria-label="Navegação principal">
+        <button class="tab-button" id="tab-btn-dashboard" data-tab="dashboard" role="tab" aria-controls="dashboard" style="display: none;"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><title>Ícone de dashboard</title><path d="M0 0h24v24H0V0z" fill="none"/><path d="M11 2v20c-5.07-.5-9-4.79-9-10s3.93-9.5 9-10zm2.03 0v8.99H22c-.47-4.74-4.24-8.52-8.97-8.99zm0 11.01V22c4.74-.47 8.5-4.25 8.97-8.99h-8.97z"/></svg>Dashboard</button>
+        <button class="tab-button active" id="tab-btn-gerar-os" data-tab="gerar-os" role="tab" aria-controls="gerar-os"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><title>Ícone de novo documento</title><path d="M0 0h24v24H0V0z" fill="none"/><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm-1 9h-2v2H9v-2H7v-2h2V9h2v2h2v2zm4-4V3.5L19.5 9H13z"/></svg>Gerar O.S.</button>
+        <button class="tab-button" id="tab-painel-os" data-tab="painel-os" role="tab" aria-controls="painel-os"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><title>Ícone do painel</title><path d="M0 0h24v24H0V0z" fill="none"/><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>Painel de O.S.</button>
+        <button class="tab-button" id="tab-diario-tecnico" data-tab="diario-tecnico" role="tab" aria-controls="diario-tecnico"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><title>Ícone de livro diário</title><path d="M0 0h24v24H0V0z" fill="none"/><path d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM9 4h2v5l-1-0.75L9 9V4zm9 16H6V4h1v9l3-2.25L13 13V4h5v16z"/></svg>Diário do Técnico</button>
+        <button class="tab-button" id="tab-relatorios" data-tab="relatorios" role="tab" aria-controls="relatorios"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><title>Ícone de gráfico de barras</title><path d="M0 0h24v24H0V0z" fill="none"/><path d="M5 9.2h3V19H5zM10.6 5h2.8v14h-2.8zm5.6 8H19v6h-2.8z"/></svg>Relatórios</button>
+        <button class="tab-button" id="tab-configuracoes" data-tab="configuracoes" role="tab" aria-controls="configuracoes"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><title>Ícone de configurações</title><path d="M0 0h24v24H0V0z" fill="none"/><path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61-.25-1.17-.59-1.69-.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49-.12-.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19-.15-.24-.42-.12-.64l2 3.46c.12.22.39.3.61-.22l2.49-1c.52.4 1.08.73 1.69-.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49.42l.38 2.65c.61-.25 1.17-.59-1.69-.98l2.49 1c.23.09.49 0 .61.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/></svg>Configurações</button> 
+        <button class="tab-button" id="tab-programas" onclick="openProgramasModal()"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><title>Ícone de programas</title><path d="M0 0h24v24H0V0z" fill="none"/><path d="M13 13v8h8v-8h-8zM3 21h8v-8H3v8zM3 3v8h8V3H3zm13.66-1.31L11 7.34 16.66 13l5.66-5.66-5.66-5.65z"/></svg>Programas</button>
+        <button class="tab-button" id="tab-btn-sobre-sim" data-tab="sobre-sim" role="tab" aria-controls="sobre-sim"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><title>Ícone de informação</title><path d="M0 0h24v24H0V0z" fill="none"/><path d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></svg>Sobre o S.I.M</button>
+        <button class="tab-button" id="tab-minha-conta" data-tab="minha-conta" role="tab" aria-controls="minha-conta"><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><title>Ícone de perfil de usuário</title><path d="M0 0h24v24H0V0z" fill="none"/><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>Minha Conta</button> 
       </nav>
 
+      <!-- ABA: Dashboard (Apenas Admin/Gerente) -->
+      <section class="tab-content" id="dashboard" role="tabpanel" aria-labelledby="tab-btn-dashboard">
+        <h3><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><title>Ícone de dashboard</title><path d="M0 0h24v24H0V0z" fill="none"/><path d="M11 2v20c-5.07-.5-9-4.79-9-10s3.93-9.5 9-10zm2.03 0v8.99H22c-.47-4.74-4.24-8.52-8.97-8.99zm0 11.01V22c4.74-.47 8.5-4.25 8.97-8.99h-8.97z"/></svg>Dashboard de Desempenho</h3>
+        <div class="filter-controls-flex" id="stats-filter-controls">
+          <div class="form-group date-range-container" style="flex-grow: 2;">
+            <label>Intervalo de Datas:</label>
+            <div id="stats-date-range" class="date-range-picker"></div>
+          </div>
+          <button class="btn btn-primary" onclick="loadStatistics()">Atualizar Gráficos</button>
+        </div>
+        <div class="stats-grid" id="stats-dashboard-container"><p>A carregar indicadores...</p></div>
+        <div id="charts-container" style="margin-top:30px;">
+          <div id="status-column-chart" style="width:100%; height:400px;"></div>
+          <!-- NOVO: Gráfico de Setores adicionado aqui -->
+          <div id="sector-pie-chart" style="width:100%; height:450px; margin-top:40px; border-top: 1px solid var(--border-color); padding-top: 20px;"></div>
+          <div id="tech-performance-chart" style="width:100%; height:450px; margin-top:40px; border-top: 1px solid var(--border-color); padding-top: 20px;"></div>
+          <div id="yesterday-completed-chart" style="width:100%; height:450px; margin-top:40px; border-top: 1px solid var(--border-color); padding-top: 20px;"></div>
+        </div>
+      </section>
+
       <!-- ABA: Gerar O.S. -->
-      <div class="tab-content active" id="gerar-os">
-        <h3>📝 Nova Ordem de Serviço</h3>
+      <section class="tab-content active" id="gerar-os" role="tabpanel" aria-labelledby="tab-btn-gerar-os">
+        <h3><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm-1 9h-2v2H9v-2H7v-2h2V9h2v2h2v2zm4-4V3.5L19.5 9H13z"/></svg>Nova Ordem de Serviço</h3>
         <p id="os-gerar-message" class="message"></p>
-        
-        <!-- O formulário é renderizado via JS para incluir opções dinâmicas -->
         <div id="os-form"><p>Carregando formulário...</p></div>
-        
         <div class="form-group">
-            <label>Anexar Imagens (Opcional - Máx 6):</label>
+            <label for="os-anexo-multiple">Anexar Imagens (Opcional - Máx 6):</label>
             <input type="file" id="os-anexo-multiple" accept="image/*" multiple onchange="handleFileChange(event)">
             <small id="anexo-filename-display" class="anexo-filename"></small>
         </div>
         <button class="btn btn-primary btn-full" onclick="submitGerarOS()">Gerar Ordem de Serviço</button>
-      </div>
+      </section>
 
       <!-- ABA: Painel de O.S. -->
-      <div class="tab-content" id="painel-os">
-        <h3>📋 Painel de Ordens de Serviço</h3>
+      <section class="tab-content" id="painel-os" role="tabpanel" aria-labelledby="tab-painel-os">
+        <h3><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>Painel de Ordens de Serviço</h3>
         <div id="painel-filtros-container"></div>
         <div class="table-container">
           <table id="os-table">
@@ -105,287 +129,354 @@
               <tr>
                 <th>Status</th>
                 <th>ID</th>
+                <th>Prioridade</th>
                 <th>Data</th>
-                <th>Solicitante</th>
+                <th class="hide-mobile">Solicitante</th>
                 <th class="hide-mobile">Setor</th>
                 <th>Descrição</th>
                 <th class="hide-mobile">Técnico</th>
-                <th class="hide-mobile">Prioridade</th>
                 <th>Ações</th>
               </tr>
             </thead>
-            <tbody>
-              <!-- Preenchido via JS -->
-            </tbody>
+            <tbody></tbody>
           </table>
         </div>
-      </div>
+        <div id="pagination-container" class="pagination-controls"></div>
+      </section>
       
       <!-- ABA: Diário Técnico -->
-      <div class="tab-content" id="diario-tecnico">
-        <h3>📘 Diário de Tarefas Técnicas</h3>
+      <section class="tab-content" id="diario-tecnico" role="tabpanel" aria-labelledby="tab-diario-tecnico">
+        <h3><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM9 4h2v5l-1-0.75L9 9V4zm9 16H6V4h1v9l3-2.25L13 13V4h5v16z"/></svg>Diário de Tarefas Técnicas</h3>
         <p id="diario-message" class="message"></p>
         <div id="diario-form">
-          <div class="form-group"><label>Data:</label><input type="date" id="diario-data" disabled></div>
-          <div class="form-group"><label>Técnico:</label><input type="text" id="diario-tecnico" disabled></div>
-          <div class="form-group"><label>Descrição:</label><textarea id="diario-descricao" rows="5"></textarea></div>
+          <div class="form-group"><label for="diario-data">Data:</label><input type="date" id="diario-data" disabled></div>
+          <div id="diario-tecnico-container" class="form-group">
+            <label for="diario-tecnico">Técnico:</label>
+            <input type="text" id="diario-tecnico" disabled>
+          </div>
+          <div class="form-group"><label for="diario-descricao">Descrição:</label><textarea id="diario-descricao" rows="5"></textarea></div>
           <div class="form-group">
-            <input type="file" accept="image/*" multiple onchange="handleDiarioFileChange(event)">
+            <label for="diario-anexo-input">Anexos:</label>
+            <input type="file" id="diario-anexo-input" accept="image/*" multiple onchange="handleDiarioFileChange(event)">
             <small id="diario-anexo-filename-display"></small>
           </div>
-          <button class="btn btn-success btn-full" onclick="submitDiarioTecnico()">Salvar Registo</button>
+          <div class="button-group" style="margin-top: 10px;">
+            <button class="btn btn-success btn-full" onclick="submitDiarioTecnico()">Salvar Registo</button>
+            <button class="btn btn-secondary btn-full" onclick="openConsultaRotinasModal()" style="margin-top: 10px;">Consultar Rotinas</button>
+          </div>
         </div>
-      </div>
+      </section>
       
-      <!-- ABA: Consulta de Rotinas -->
-      <div class="tab-content" id="consulta-rotinas">
-        <h3>🔍 Consulta de Rotinas</h3>
-        <p id="rotinas-message" class="message"></p>
-        <div id="rotinas-filter-controls" class="filter-controls-flex">
-            <div class="form-group" style="flex:1;">
-              <label>Técnico:</label>
-              <select id="rotinas-filter-tecnico"><option value="Todos">Todos</option></select>
-            </div>
-            <div class="form-group" style="flex:1;">
-              <label>Início:</label>
-              <input type="date" id="rotinas-filter-data-inicio">
-            </div>
-            <div class="form-group" style="flex:1;">
-              <label>Fim:</label>
-              <input type="date" id="rotinas-filter-data-fim">
-            </div>
-            <button class="btn btn-primary" onclick="aplicarFiltroConsultaRotinas()">Filtrar</button>
-        </div>
-        <div class="table-container"><table id="rotinas-table"></table></div>
-        <button class="btn btn-success" onclick="imprimirConsultaRotinas()" style="margin-top:10px;">Imprimir</button>
-      </div>
-
       <!-- ABA: Relatórios -->
-      <div class="tab-content" id="relatorios">
-        <h3>📊 Relatórios</h3>
-        <nav class="sub-tabs">
-          <button class="sub-tab-button active" data-sub-tab="estatisticas">Estatísticas</button>
-          <button class="sub-tab-button" data-sub-tab="relatorio-os">Relatório de O.S.</button>
+      <section class="tab-content" id="relatorios" role="tabpanel" aria-labelledby="tab-relatorios">
+        <h3><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M5 9.2h3V19H5zM10.6 5h2.8v14h-2.8zm5.6 8H19v6h-2.8z"/></svg>Relatórios</h4>
+        <nav class="sub-tabs" role="tablist" aria-label="Relatórios disponíveis">
+          <button class="sub-tab-button active" id="subtab-btn-relatorio-os" data-sub-tab="relatorio-os" role="tab" aria-controls="relatorio-os-subcontent">Relatório de O.S.</button>
+          <button class="sub-tab-button" id="subtab-btn-relatorio-rotinas" data-sub-tab="relatorio-rotinas" role="tab" aria-controls="relatorio-rotinas-subcontent">Relatório de Rotinas</button>
         </nav>
         
-        <!-- Sub-aba Estatísticas -->
-        <div class="sub-tab-content active" id="estatisticas-subcontent">
-            <h4>Dashboard</h4>
-            <div class="filter-controls-flex" id="stats-filter-controls">
-              <div class="form-group" style="flex:1;">
-                <label>Início:</label>
-                <input type="date" id="stats-filter-data-inicio">
+        <section class="sub-tab-content active" id="relatorio-os-subcontent" role="tabpanel" aria-labelledby="subtab-btn-relatorio-os">
+            <h4>Relatório Detalhado de O.S.</h4>
+            <div class="filter-controls-flex">
+              <div class="form-group date-range-container" style="flex-grow: 2;">
+                <label>Intervalo de Datas:</label>
+                <div id="rel-os-date-range" class="date-range-picker"></div>
               </div>
-              <div class="form-group" style="flex:1;">
-                <label>Fim:</label>
-                <input type="date" id="stats-filter-data-fim">
-              </div>
-              <button class="btn btn-primary" onclick="loadStatistics()">Aplicar</button>
+              <div class="form-group"><label>Status:</label><select id="rel-status"><option>Todos</option><option>Ativas</option><option>Aberta</option><option>Em Andamento</option><option>Pendente</option><option>Concluída</option></select></div>
+              <div class="form-group"><label>Técnico:</label><select id="rel-tecnico"><option>Todos</option></select></div>
+              <div class="form-group"><label>Setor:</label><select id="rel-setor"><option>Todos</option></select></div>
+              <button class="btn btn-primary" onclick="aplicarFiltroRelatorio()">Filtrar</button>
             </div>
-            <div class="stats-grid" id="stats-dashboard-container"><p>Carregando...</p></div>
-            <div id="charts-container" style="margin-top:30px;">
-              <div id="status-column-chart" style="width:100%; height:400px;"></div>
-              <div id="tech-performance-chart" style="width:100%; height:450px; margin-top:40px; border-top: 1px solid #eee; padding-top: 20px;"></div>
-            </div>
-        </div>
-        
-        <!-- Sub-aba Relatório Detalhado -->
-        <div class="sub-tab-content" id="relatorio-os-subcontent">
-            <h4>Relatório Detalhado</h4>
-            <div id="filter-controls"></div>
             <div class="table-container"><table id="relatorios-table-os"></table></div>
             <button class="btn btn-success" onclick="imprimirRelatorio()" style="margin-top:10px;">Imprimir</button>
-        </div>
-      </div>
+        </section>
+        
+        <section class="sub-tab-content" id="relatorio-rotinas-subcontent" role="tabpanel" aria-labelledby="subtab-btn-relatorio-rotinas">
+            <h4>Relatório de Rotinas</h4>
+            <p id="relatorio-rotinas-message" class="message"></p>
+            <div id="relatorio-rotinas-filter-controls" class="filter-controls-flex">
+              <div class="form-group date-range-container" style="flex-grow: 2;">
+                <label>Intervalo de Datas:</label>
+                <div id="rel-rotinas-date-range" class="date-range-picker"></div>
+              </div>
+              <div class="form-group">
+                <label for="rel-rotinas-filter-tecnico">Técnico:</label>
+                <select id="rel-rotinas-filter-tecnico"><option value="Todos">Todos</option></select>
+              </div>
+              <button class="btn btn-primary" onclick="aplicarFiltroRelatorioRotinas()">Filtrar</button>
+            </div>
+            <div class="table-container"><table id="relatorios-table-rotinas"></table></div>
+            <button class="btn btn-success" onclick="imprimirRelatorioRotinas()" style="margin-top:10px;">Imprimir</button>
+        </section>
+        
+      </section>
       
       <!-- ABA: Configurações -->
-      <div class="tab-content" id="configuracoes">
-        <h3>⚙️ Configurações</h3>
-        <nav class="sub-tabs">
-          <button class="sub-tab-button active" data-sub-tab="acesso-senha">Acesso e Senha</button>
-          <button class="sub-tab-button" data-sub-tab="popup">Pop-up</button>
-          <button class="sub-tab-button" data-sub-tab="enviar-mensagem">Mensagens</button>
-          <button class="sub-tab-button" data-sub-tab="log-acoes">Logs</button>
+      <section class="tab-content" id="configuracoes" role="tabpanel" aria-labelledby="tab-configuracoes">
+        <h3><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61-.25-1.17-.59-1.69-.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49-.12-.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19-.15-.24-.42-.12-.64l2 3.46c.12.22.39.3.61-.22l2.49-1c.52.4 1.08.73 1.69-.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49.42l.38 2.65c.61-.25 1.17-.59-1.69-.98l2.49 1c.23.09.49 0 .61.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/></svg>Configurações do Sistema</h3>
+        <nav class="sub-tabs" role="tablist" aria-label="Opções de configuração">
+          <button class="sub-tab-button active" id="subtab-btn-acesso" data-sub-tab="acesso-senha" role="tab" aria-controls="acesso-senha-subcontent">Utilizadores</button>
+          <button class="sub-tab-button" id="subtab-btn-popup" data-sub-tab="popup" role="tab" aria-controls="popup-subcontent">Pop-up Inicial</button>
+          <button class="sub-tab-button" id="subtab-btn-log" data-sub-tab="log-acoes" role="tab" aria-controls="log-acoes-subcontent">Log de Ações</button>
+          <button class="sub-tab-button" id="subtab-btn-enviar-msg" data-sub-tab="enviar-mensagem" role="tab" aria-controls="enviar-mensagem-subcontent">Enviar Mensagem</button>
         </nav>
+
+        <section class="sub-tab-content active" id="acesso-senha-subcontent" role="tabpanel" aria-labelledby="subtab-btn-acesso">
+            <h4>Gerir Acessos de Utilizadores</h4>
+            <button class="btn btn-success" onclick="openUserModal(null)" style="margin-bottom:15px;">Novo Utilizador</button>
+            <div class="table-container"><table id="admin-users-table"><thead><tr><th>Email</th><th>Nome</th><th>Nível</th><th>Ações</th></tr></thead><tbody></tbody></table></div>
+        </section>
         
-        <div class="sub-tab-content active" id="acesso-senha-subcontent">
-            <button class="btn btn-success" onclick="openUserModal(null)">+ Novo Utilizador</button>
-            <div class="table-container">
-              <table id="admin-users-table">
-                <thead><tr><th>Email</th><th>Nome</th><th>Nível</th><th>Ações</th></tr></thead>
-                <tbody></tbody>
-              </table>
+        <section class="sub-tab-content" id="popup-subcontent" role="tabpanel" aria-labelledby="subtab-btn-popup">
+            <h4>Configurar Pop-up da Tela de Login</h4>
+            <p id="popup-config-message" class="message"></p>
+            <div class="form-group">
+                <label for="popup-habilitado">Habilitar Pop-up:</label>
+                <select id="popup-habilitado">
+                    <option value="TRUE">Sim</option>
+                    <option value="FALSE">Não</option>
+                </select>
             </div>
-        </div>
+            <div class="form-group">
+                <label for="popup-mensagem">Mensagem:</label>
+                <textarea id="popup-mensagem" rows="4"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="popup-image-url">URL da Imagem (Opcional):</label>
+                <input type="text" id="popup-image-url" placeholder="https://exemplo.com/imagem.png">
+            </div>
+            <button class="btn btn-primary" onclick="savePopUpConfig()">Salvar Configurações</button>
+        </section>
         
-        <div class="sub-tab-content" id="enviar-mensagem-subcontent">
-            <h4>Mensageiro</h4>
+        <section class="sub-tab-content" id="log-acoes-subcontent" role="tabpanel" aria-labelledby="subtab-btn-log">
+            <h4>Log de Ações do Sistema</h4>
+            <div id="admin-logs-filter-controls" class="filter-controls-flex">
+              <div class="form-group date-range-container">
+                  <label>Intervalo de Datas:</label>
+                  <div id="rel-logs-date-range" class="date-range-picker"></div>
+              </div>
+              <div class="form-group">
+                  <label for="rel-logs-filter-user">Utilizador:</label>
+                  <select id="rel-logs-filter-user"><option value="Todos">Todos</option></select>
+              </div>
+              <button class="btn btn-primary" onclick="aplicarFiltroLogs()">Filtrar</button>
+            </div>
+            <div class="table-container"><table id="admin-logs-table"><thead><tr><th>Data/Hora</th><th>Email</th><th>Ação</th><th>Detalhes</th></tr></thead><tbody></tbody></table></div>
+            <button class="btn btn-success" onclick="imprimirRelatorioLogs()" style="margin-top:10px;">Imprimir</button>
+        </section>
+
+        <section class="sub-tab-content" id="enviar-mensagem-subcontent" role="tabpanel" aria-labelledby="subtab-btn-enviar-msg">
+            <h4>Enviar Mensagem Privada</h4>
             <p id="msg-send-message" class="message"></p>
             <div class="form-group">
-              <label>Destinatário:</label>
-              <select id="msg-recipient-user"></select>
+                <label for="msg-recipient-user">Destinatário:</label>
+                <select id="msg-recipient-user"></select>
             </div>
             <div class="form-group">
-              <label>Mensagem:</label>
-              <textarea id="msg-content" rows="4"></textarea>
+                <label for="msg-content">Mensagem:</label>
+                <textarea id="msg-content" rows="4"></textarea>
             </div>
-            <button class="btn btn-primary btn-full" onclick="sendMessage()">Enviar</button>
-        </div>
-        
-        <div class="sub-tab-content" id="popup-subcontent"></div>
-        
-        <div class="sub-tab-content" id="log-acoes-subcontent">
-            <div class="table-container">
-              <table id="admin-logs-table">
-                <thead><tr><th>Data</th><th>User</th><th>Ação</th><th>Detalhes</th></tr></thead>
-                <tbody></tbody>
-              </table>
-            </div>
-        </div>
-      </div>
+            <button class="btn btn-primary" onclick="sendMessage()">Enviar</button>
+        </section>
+      </section>
 
       <!-- ABA: Minha Conta -->
-      <div class="tab-content" id="minha-conta">
-        <h3>🔑 Minha Conta</h3>
-        <div class="card" style="max-width:500px; margin:0 auto;">
-            <h4>Alterar Senha</h4>
-            <p id="change-password-message" class="message"></p>
-            <div class="form-group"><label>Email:</label><input type="text" id="cp-email" disabled></div>
-            <div class="form-group"><label>Senha Atual:</label><input type="password" id="cp-old-password"></div>
-            <div class="form-group"><label>Nova Senha:</label><input type="password" id="cp-new-password"></div>
-            <button class="btn btn-primary btn-full" onclick="submitChangePassword()">Salvar</button>
+      <section class="tab-content" id="minha-conta" role="tabpanel" aria-labelledby="tab-minha-conta">
+        <h3><svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>Minha Conta</h3>
+        <div class="account-grid">
+            <div class="account-section">
+                <h4>Alterar Senha</h4>
+                <p id="change-password-message" class="message"></p>
+                <div class="form-group"><label>Email:</label><input type="text" id="cp-email" disabled></div>
+                <div class="form-group"><label>Senha Atual:</label><input type="password" id="cp-old-password"></div>
+                <div class="form-group"><label>Nova Senha:</label><input type="password" id="cp-new-password"></div>
+                <button class="btn btn-primary" onclick="submitChangePassword()">Alterar Senha</button>
+            </div>
+            <div class="account-section">
+                <h4>Mensagens Recebidas</h4>
+                <div id="my-messages-container" class="messages-list"></div>
+            </div>
         </div>
-        <div class="card" style="margin-top:20px;">
-          <h3>📩 Mensagens Recebidas</h3>
-          <div id="my-messages-container"><p class="no-messages">A carregar...</p></div>
+      </section>
+      
+      <!-- ABA: Sobre o S.I.M -->
+      <section class="tab-content" id="sobre-sim" role="tabpanel" aria-labelledby="tab-btn-sobre-sim">
+        <div class="about-content" style="text-align: center; display: flex; flex-direction: column; align-items: center; margin: 0 auto;">
+            <img src="https://i.postimg.cc/xkn8bR6p/SIM-Manager.png" alt="Logo do S.I.M" class="sim-logo" style="margin: 0 auto 15px auto; max-width: 250px;">
+            <h3 style="text-align: center; max-width: 600px; margin: 15px auto;">Sobre o S.I.M - Sistema Interno de Manutenção</h3>
+            <p style="text-align: center; max-width: 600px; margin: 10px auto;"><strong>Versão:</strong> 2.20</p>
+            <p style="text-align: center; max-width: 600px; margin: 10px auto;"><strong>Data da Última Atualização:</strong> 08/03/2026</p>
+            <p style="text-align: center; max-width: 600px; margin: 10px auto;"><strong>Desenvolvedor:</strong> Clodoaldo Antunes Garcia</p>
+            <p style="text-align: center; max-width: 600px; margin: 10px auto; line-height: 1.6;">O S.I.M é um sistema robusto e intuitivo desenhado para otimizar e centralizar a gestão de ordens de serviço. Ele permite o registro, acompanhamento e finalização de tarefas de manutenção, facilitando a comunicação entre solicitantes, técnicos e gestores.</p>
+            <p style="text-align: center; max-width: 600px; margin: 10px auto;"><strong>Licença válida até:</strong> <span id="system-validity-date">--/--/----</span></p>
         </div>
-      </div>
-    </div>
+      </section>
+    </main>
   </div>
-
+  
   <!-- =========================================
-       3. WIDGETS FLUTUANTES (CHAT GLOBAL)
+       3. MODAIS
        ========================================= -->
   
-  <!-- Botão Flutuante (FAB) -->
-  <div id="chat-fab" class="chat-fab" onclick="toggleChatWindow()">
-    💬
-    <div id="chat-badge" class="chat-badge"></div>
-  </div>
-
-  <!-- Janela de Chat -->
-  <div id="chat-floating-window" class="chat-window" role="dialog" aria-label="Chat Global">
-    <div class="chat-header">
-      <span>Chat SIM - Oscarinn Eco Resort</span>
-      <span class="chat-close" onclick="toggleChatWindow()">&times;</span>
-    </div>
-    
-    <div id="chat-history-container" class="chat-body">
-      <p style="text-align:center; color:#777; margin-top:20px;">Carregando chat...</p>
-    </div>
-    
-    <div class="chat-footer">
-      <button class="chat-attach-btn" type="button" title="Anexar arquivo" onclick="document.getElementById('chat-attach-input').click()">📎</button>
-      <input type="file" id="chat-attach-input" accept="*/*" style="display:none" multiple onchange="handleChatAttachFiles(event)">
-      <div id="chat-attachments-preview" class="chat-attachments-list" aria-live="polite"></div>
-
-      <input type="text" id="chat-input-text" class="chat-input" placeholder="Digite uma mensagem...">
-      <button class="chat-send-btn" onclick="sendChatMessage()">&#10148;</button>
-    </div>
-  </div>
-
-  <!-- =========================================
-       4. MODAIS (POP-UPS)
-       ========================================= -->
-
-  <!-- Modal Detalhes OS -->
+  <!-- Modal de Detalhes/Edição da O.S. -->
   <div id="os-modal" class="modal">
     <div class="modal-content">
-      <span class="close-button">&times;</span>
-      <h4>Detalhes OS <span id="modal-os-id"></span></h4>
+      <span class="close-button" onclick="document.getElementById('os-modal').style.display='none'">&times;</span>
+      <h3>Detalhes da O.S. #<span id="modal-os-id"></span></h3>
       <div id="modal-details"></div>
-      <hr>
+      <hr style="margin:20px 0; border-color:var(--border-color)">
       <p id="modal-message" class="message"></p>
       <div id="modal-edit-form"></div>
     </div>
   </div>
-
-  <!-- Modal Admin Usuários -->
-  <div id="user-admin-modal" class="modal">
-    <div class="modal-content" style="max-width:500px;">
-      <span class="close-button" onclick="document.getElementById('user-admin-modal').style.display='none';">&times;</span>
-      <h4 id="user-modal-title">Novo Utilizador</h4>
-      <p id="user-modal-message" class="message"></p>
-      <div class="form-group"><label>Email:</label><input type="text" id="user-email"></div>
-      <div class="form-group"><label>Nome:</label><input type="text" id="user-nome"></div>
-      <div class="form-group">
-        <label>Nível:</label>
-        <select id="user-nivel">
-          <option value="Solicitante">Solicitante</option>
-          <option value="Tecnico">Tecnico</option>
-          <option value="Admin">Admin</option>
-        </select>
+  
+  <!-- Modal de Confirmação de Geração de O.S. -->
+  <div id="confirm-os-modal" class="modal">
+    <div class="modal-content" style="max-width: 500px;">
+      <span class="close-button" onclick="document.getElementById('confirm-os-modal').style.display='none'">&times;</span>
+      <h3>Confirmar Nova O.S.</h3>
+      <p>Por favor, confirme os detalhes da Ordem de Serviço antes de gerar:</p>
+      <div id="confirm-os-details" style="background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px;"></div>
+      <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
+        <button class="btn btn-secondary" onclick="document.getElementById('confirm-os-modal').style.display='none'">Cancelar</button>
+        <button class="btn btn-primary" onclick="executeSubmitOS()">Confirmar e Gerar</button>
       </div>
-      <div class="form-group"><label>Senha:</label><input type="password" id="user-senha"></div>
-      <button id="user-modal-save-btn" class="btn btn-primary btn-full" onclick="saveUser()">Salvar</button>
-      <button id="user-modal-delete-btn" class="btn btn-error btn-full" style="display:none; margin-top:10px;" onclick="deleteUser()">Excluir</button>
     </div>
   </div>
 
-  <!-- Modal Rotina -->
+  <!-- Modal de Consulta de Rotinas (Diário) -->
+  <div id="consulta-rotinas-modal" class="modal">
+    <div class="modal-content" style="max-width: 900px;">
+      <span class="close-button" onclick="document.getElementById('consulta-rotinas-modal').style.display='none'">&times;</span>
+      <h3>Consultar Rotinas do Diário Técnico</h3>
+      <div id="diario-filter-controls" class="filter-controls-flex">
+          <div class="form-group date-range-container">
+              <label>Intervalo de Datas:</label>
+              <div id="diario-date-range" class="date-range-picker"></div>
+          </div>
+          <div class="form-group">
+              <label for="diario-filter-tecnico">Técnico:</label>
+              <select id="diario-filter-tecnico"><option value="Todos">Todos</option></select>
+          </div>
+          <button class="btn btn-primary" onclick="aplicarFiltroDiario()">Filtrar</button>
+      </div>
+      <div class="table-container" id="consulta-rotinas-table-container">
+          <table id="diario-table">
+              <thead><tr><th>Data</th><th>Técnico</th><th>Descrição</th><th>Anexos</th></tr></thead>
+              <tbody></tbody>
+          </table>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Modal de Edição de Rotina (Admin) -->
   <div id="rotina-modal" class="modal">
-    <div class="modal-content" style="max-width:500px;">
-      <span class="close-button" onclick="document.getElementById('rotina-modal').style.display='none';">&times;</span>
-      <h4>Editar Rotina</h4>
+    <div class="modal-content">
+      <span class="close-button" onclick="document.getElementById('rotina-modal').style.display='none'">&times;</span>
+      <h3>Editar Registo de Rotina</h3>
       <p id="rotina-modal-message" class="message"></p>
       <div class="form-group"><label>Data:</label><input type="text" id="rotina-data" disabled></div>
       <div class="form-group"><label>Técnico:</label><input type="text" id="rotina-tecnico" disabled></div>
-      <div class="form-group"><label>Descrição:</label><textarea id="rotina-descricao" rows="6"></textarea></div>
-      <button id="rotina-modal-save-btn" class="btn btn-primary btn-full" onclick="salvarAtualizacaoRotina()">Salvar</button>
-      <button id="rotina-modal-delete-btn" class="btn btn-error btn-full" style="margin-top:10px;" onclick="excluirRotina()">Excluir</button>
+      <div class="form-group"><label>Descrição:</label><textarea id="rotina-descricao" rows="5"></textarea></div>
+      <button class="btn btn-primary" onclick="salvarAtualizacaoRotina()">Salvar Alterações</button>
+      <button class="btn btn-error" onclick="excluirRotina()" style="margin-left:10px;">Excluir Registo</button>
+    </div>
+  </div>
+  
+  <!-- Modal de Gestão de Utilizadores (Admin) -->
+  <div id="user-admin-modal" class="modal">
+    <div class="modal-content">
+      <span class="close-button" onclick="document.getElementById('user-admin-modal').style.display='none'">&times;</span>
+      <h3 id="user-modal-title">Editar Utilizador</h3>
+      <p id="user-modal-message" class="message"></p>
+      <div class="form-group"><label>Email:</label><input type="text" id="user-email"></div>
+      <div class="form-group"><label>Nome:</label><input type="text" id="user-nome"></div>
+      <div class="form-group"><label>Nível:</label><select id="user-nivel"><option>Solicitante</option><option>Tecnico</option><option>Gerente</option><option>Recepcao</option><option>Admin</option></select></div>
+      <div class="form-group"><label>Nova Senha:</label><input type="password" id="user-senha"></div>
+      <button class="btn btn-primary" onclick="saveUser()">Salvar</button>
+      <button class="btn btn-error" id="user-modal-delete-btn" onclick="deleteUser()" style="margin-left:10px;">Excluir</button>
     </div>
   </div>
 
-  <!-- Modal Aviso Popup -->
-  <div id="popup-modal" class="modal">
-    <div class="modal-content" style="max-width:450px; text-align:center;">
-      <h4>Aviso</h4>
-      <img id="popup-image" style="max-width:100%; border-radius:8px; margin-bottom:15px; display:none;">
+  <!-- Modal de Pop-up Inicial -->
+  <div id="popup-modal" class="modal" style="display:none; align-items:center; justify-content:center;">
+    <div class="modal-content" style="max-width: 500px; text-align: center;">
+      <span class="close-button" onclick="document.getElementById('popup-modal').style.display='none'">&times;</span>
+      <h3>Aviso Importante</h3>
+      <img id="popup-image" src="" alt="Imagem do Pop-up" style="max-width: 100%; height: auto; margin-bottom: 15px; border-radius: 8px;">
       <p id="popup-content"></p>
-      <button class="btn btn-primary" onclick="document.getElementById('popup-modal').style.display='none';">Fechar</button>
     </div>
-  </div>
-  
-  <!-- Modal Notificação Mensagem -->
-  <div id="message-notification-modal" class="modal">
-    <div class="modal-content" style="max-width:450px; text-align:center;">
-      <span class="close-button" onclick="document.getElementById('message-notification-modal').style.display='none';">&times;</span>
-      <h4>📩 Nova Mensagem</h4>
-      <p>Você tem mensagens novas do Administrador.</p>
-      <button class="btn btn-primary" onclick="openMessageNotificationTab()">Ver Mensagens</button>
-    </div>
-  </div>
-  
-  <!-- Modal Visualizar Mensagem (Detalhe) -->
-  <div id="view-message-modal" class="modal">
-     <div class="modal-content" style="max-width:500px;">
-       <span class="close-button" onclick="document.getElementById('view-message-modal').style.display='none';">&times;</span>
-       <h4>Detalhe da Mensagem</h4>
-       <p id="view-message-modal-message" class="message"></p>
-       <p><strong>De:</strong> <span id="msg-detail-from"></span></p>
-       <p><strong>Data:</strong> <span id="msg-detail-date"></span></p>
-       <div style="background:#f9f9f9; padding:10px; border-radius:5px; border:1px solid #eee; margin:10px 0; min-height:50px;">
-          <p id="msg-detail-body" style="white-space: pre-wrap; margin:0;"></p>
-       </div>
-       <button id="msg-delete-btn" class="btn btn-error btn-full">Excluir Mensagem</button>
-     </div>
   </div>
 
-  <!-- Toast de Notificações -->
+  <!-- NOVO: Modal de Visualização de Imagem -->
+  <div id="image-viewer-modal" class="modal">
+    <span class="close-button" onclick="closeImageModal(event)">&times;</span>
+    <img class="modal-image-content" id="modal-image-viewer-src" onclick="event.stopPropagation()">
+  </div>
+
+  <!-- NOVO: Modal de Programas -->
+  <div id="programas-modal" class="modal">
+    <div class="modal-content" style="max-width: 450px;">
+        <span class="close-button" onclick="document.getElementById('programas-modal').style.display='none'">&times;</span>
+        <h3>Programas Externos</h3>
+        <div class="programas-buttons-container">
+            <button id="btn-requisicao-material" class="btn-3d">
+                <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M19 8H5c-1.1 0-2 .9-2 2v6c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-6c0-1.1-.9-2-2-2zm-3 6H8v-2h8v2zm5-12H3c-1.1 0-2 .9-2 2v2h2V4h18v2h2V4c0-1.1-.9-2-2-2z"/></svg>
+                Requisição de Material
+            </button>
+            <button id="btn-pedido-compra" class="btn-3d">
+                <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M18 6h-2c0-2.21-1.79-4-4-4S8 3.79 8 6H6c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-6-2c1.1 0 2 .9 2 2h-4c0-1.1.9-2 2-2zm6 16H6V8h2v2c0 .55.45 1 1 1s1-.45 1-1V8h4v2c0 .55.45 1 1 1s1-.45 1-1V8h2v12z"/></svg>
+                Pedido de Compra
+            </button>
+            <button id="btn-indicadores-estatisticas" class="btn-3d">
+                <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6h-6z"/></svg>
+                Indicadores e Estatisticas
+            </button>
+            <button id="btn-demonstrativos-despesas" class="btn-3d">
+                <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/></svg>
+                Demonstrativos de Despesas e Compras
+            </button>
+            <button id="btn-avaliacao-desempenho" class="btn-3d">
+                <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm0 4c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm6 12H6v-1.4c0-2 4-3.1 6-3.1s6 1.1 6 3.1V19z"/></svg>
+                Avaliação de Desempenho
+            </button>
+        </div>
+    </div>
+  </div>
+  
+  <!-- =========================================
+       4. CHAT E TOAST
+       ========================================= -->
+
+  <!-- Toast/Notificação -->
   <div id="os-toast" class="toast"></div>
 
-  <!-- Inclui a Lógica JavaScript -->
-  <?!= include('JavaScript'); ?>
-
+  <!-- Chat Flutuante -->
+  <div id="chat-fab" class="chat-fab" onclick="toggleChatWindow()" title="Chat Global">
+      <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/></svg>
+      <div id="chat-unread-badge" class="chat-badge"></div>
+  </div>
+  
+  <div id="chat-floating-window" class="chat-window">
+    <div class="chat-header"><span>Chat Global</span><span class="chat-close" onclick="toggleChatWindow()" style="cursor:pointer;">&times;</span></div>
+    <div id="chat-history-container" class="chat-body"></div>
+    <div class="chat-footer-wrapper">
+      <div id="chat-mention-suggestions"></div>
+      <div id="chat-reply-preview-container"></div>
+      <div class="chat-footer">
+          <button class="chat-attach-btn" onclick="document.getElementById('chat-file-input').click()" title="Anexar">
+            <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79 4-4 4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg>
+          </button>
+          <input type="file" id="chat-file-input" style="display:none" multiple onchange="handleChatAttachFiles(event)">
+          <div id="chat-attachments-preview"></div>
+          <input type="text" id="chat-input-text" class="chat-input" placeholder="Digite uma mensagem...">
+          <button class="chat-send-btn" onclick="sendChatMessage()" title="Enviar">
+            <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor" role="img" aria-hidden="true"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2 .01 7z"/></svg>
+          </button>
+      </div>
+    </div>
+  </div>
+  
+  <?!= HtmlService.createHtmlOutputFromFile('JavaScript').getContent(); ?>
 </body>
 </html>
